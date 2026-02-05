@@ -7,14 +7,14 @@ import numpy as np
 sys.path.extend([".", "./src", "./src/DeepCTR-Torch", "./src/tianshou"])
 from src.core.envs.BaseData import BaseData, get_distance_mat
 
-# ROOTPATH = os.path.dirname(__file__)
-ROOTPATH = "data/YahooR3"
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../.."))
+ROOTPATH = os.path.join(REPO_ROOT, "data", "YahooR3")
 DATAPATH = os.path.join(ROOTPATH, "data_raw")
 PRODATAPATH = os.path.join(ROOTPATH, "data_processed")
 
 for path in [PRODATAPATH]:
     if not os.path.exists(path):
-        os.mkdir(path)
+        os.makedirs(path, exist_ok=True)
 
 
 class YahooData(BaseData):
@@ -22,9 +22,20 @@ class YahooData(BaseData):
         super(YahooData, self).__init__()
         self.train_data_path = "ydata-ymusic-rating-study-v1_0-train.txt"
         self.val_data_path = "ydata-ymusic-rating-study-v1_0-test.txt"
+        self.questionnaire_path = "ydata-ymusic-rating-study-v1_0-survey-answers.txt"
         
     def get_features(self, is_userinfo=None):
-        user_features = ["user_id"]
+        user_features = [
+            "user_id",
+            "rate_frequency",
+            "rate_hate",
+            "rate_dislike",
+            "rate_neutral",
+            "rate_like",
+            "rate_love",
+            "preference_sensitive",
+            "rating_activeness",
+        ]
         item_features = ['item_id']
         reward_features = ["rating"]
         return user_features, item_features, reward_features
@@ -40,6 +51,8 @@ class YahooData(BaseData):
         df_user = self.load_user_feat()
         df_item = self.load_item_feat()
         list_feat = None
+        df_data = df_data.join(df_user, on="user_id", how="left")
+        df_data = df_data.join(df_item, on="item_id", how="left")
 
         return df_data, df_user, df_item, list_feat
 
@@ -85,6 +98,31 @@ class YahooData(BaseData):
     def load_user_feat(self):
         df_user = pd.DataFrame(np.arange(15400), columns=["user_id"])
         df_user.set_index("user_id", inplace=True)
+        answers_path = os.path.join(DATAPATH, self.questionnaire_path)
+        df_q = pd.read_csv(
+            answers_path,
+            sep=r"\s+",
+            header=None,
+            names=[
+                "rate_frequency",
+                "rate_hate",
+                "rate_dislike",
+                "rate_neutral",
+                "rate_like",
+                "rate_love",
+                "preference_sensitive",
+            ],
+            dtype=int,
+        )
+        # Survey answers are line-aligned with user ids 1..5400 (first 5400 users).
+        df_q["user_id"] = np.arange(len(df_q))
+        df_q["rating_activeness"] = df_q[
+            ["rate_frequency", "rate_hate", "rate_dislike", "rate_neutral", "rate_like", "rate_love"]
+        ].mean(axis=1).round().astype(int)
+        df_q = df_q.set_index("user_id")
+
+        df_user = df_user.join(df_q, how="left")
+        df_user = df_user.fillna(0).astype(int)
         return df_user
 
     def load_item_feat(self):
@@ -107,3 +145,19 @@ if __name__ == "__main__":
     df_val, df_user_val, df_item_val, _ = dataset.get_val_data()
     print("YahooR3: Train #user={}  #item={}  #inter={}".format(df_train['user_id'].nunique(), df_train['item_id'].nunique(), len(df_train)))
     print("YahooR3: Test  #user={}  #item={}  #inter={}".format(df_val['user_id'].nunique(), df_val['item_id'].nunique(), len(df_val)))
+    # ===== DEBUG user features =====
+    print("\n===== DEBUG df_user_train =====")
+    print("shape:", df_user_train.shape)
+    print("columns:", df_user_train.columns.tolist())
+    print(df_user_train.head())
+
+    print("\nDescribe df_user_train:")
+    print(df_user_train.describe(include="all"))
+
+    print("\nSample users:")
+    print(df_user_train.sample(5, random_state=0))
+
+    print("\n===== DEBUG df_user_val =====")
+    print("shape:", df_user_val.shape)
+    print("columns:", df_user_val.columns.tolist())
+    print(df_user_val.head())

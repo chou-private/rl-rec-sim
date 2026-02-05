@@ -7,8 +7,8 @@ sys.path.extend(["./src", "./src/DeepCTR-Torch", "./src/tianshou"])
 
 from src.core.envs.YahooR3.YahooData import YahooData
 
-# ROOTPATH = os.path.dirname(__file__)
-ROOTPATH = "data/YahooR3"
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../.."))
+ROOTPATH = os.path.join(REPO_ROOT, "data", "YahooR3")
 DATAPATH = os.path.join(ROOTPATH, "data_raw")
 PRODATAPATH = os.path.join(ROOTPATH, "data_processed")
 
