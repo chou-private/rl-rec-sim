@@ -2,5 +2,14 @@ data/
 saved_models/
 visual_results/
 src/tianshou/
+# mac
+.DS_Store
+
+# pycharm
+.idea/
+
+# python cache
+__pycache__/
+*.pyc
 
 
