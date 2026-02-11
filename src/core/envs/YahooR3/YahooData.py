@@ -23,18 +23,16 @@ class YahooData(BaseData):
         self.train_data_path = "ydata-ymusic-rating-study-v1_0-train.txt"
         self.val_data_path = "ydata-ymusic-rating-study-v1_0-test.txt"
         self.questionnaire_path = "ydata-ymusic-rating-study-v1_0-survey-answers.txt"
+        self.only_survey = True
         
     def get_features(self, is_userinfo=None):
         user_features = [
             "user_id",
-            "rate_frequency",
-            "rate_hate",
-            "rate_dislike",
-            "rate_neutral",
-            "rate_like",
-            "rate_love",
-            "preference_sensitive",
-            "rating_activeness",
+            "activity_level",
+            "extreme_trigger",
+            "neutral_trigger",
+            "positivity_bias",
+            "user_type",
         ]
         item_features = ['item_id']
         reward_features = ["rating"]
@@ -53,6 +51,9 @@ class YahooData(BaseData):
         list_feat = None
         df_data = df_data.join(df_user, on="user_id", how="left")
         df_data = df_data.join(df_item, on="item_id", how="left")
+        if self.only_survey:
+            df_data = df_data[df_data["user_id"] < 5400]
+            df_user = df_user.loc[df_user.index < 5400]
 
         return df_data, df_user, df_item, list_feat
 
@@ -116,9 +117,47 @@ class YahooData(BaseData):
         )
         # Survey answers are line-aligned with user ids 1..5400 (first 5400 users).
         df_q["user_id"] = np.arange(len(df_q))
-        df_q["rating_activeness"] = df_q[
-            ["rate_frequency", "rate_hate", "rate_dislike", "rate_neutral", "rate_like", "rate_love"]
-        ].mean(axis=1).round().astype(int)
+        df_q["has_survey"] = 1
+        df_q["activity_level"] = df_q["rate_frequency"]
+        df_q["extreme_trigger"] = (df_q["rate_hate"] + df_q["rate_love"]) / 2
+        df_q["neutral_trigger"] = df_q["rate_neutral"]
+        df_q["positivity_bias"] = (df_q["rate_like"] + df_q["rate_love"]) / 2 - (
+            df_q["rate_hate"] + df_q["rate_dislike"]
+        ) / 2
+        df_q["preference_sensitive"] = (df_q["preference_sensitive"] == 2).astype(int)
+
+        # Quantile-based typing (computed on survey users only)
+        # Use rank-based percentiles to avoid degenerate quantiles when many users share the same activity level.
+        df_rank = df_q.sort_values(
+            ["activity_level", "extreme_trigger", "neutral_trigger", "positivity_bias", "user_id"],
+            ascending=[True, True, True, True, True],
+        ).reset_index(drop=True)
+        df_rank["activity_rank_pct"] = (df_rank.index + 1) / len(df_rank)
+        rank_pct_map = df_rank.set_index("user_id")["activity_rank_pct"].to_dict()
+        q_e_high = df_q["extreme_trigger"].quantile(0.8)
+        q_n_low = df_q["neutral_trigger"].quantile(0.2)
+        q_b_low, q_b_high = df_q["positivity_bias"].quantile([0.2, 0.8]).to_list()
+
+        def classify_user(row):
+            a = row["activity_level"]
+            e = row["extreme_trigger"]
+            n = row["neutral_trigger"]
+            b = row["positivity_bias"]
+            rank_pct = rank_pct_map.get(row["user_id"], 0)
+            if rank_pct >= 0.8:
+                return 2  # Type2: Active
+            if rank_pct <= 0.2:
+                return 1  # Type1: Silent
+            # Only split the middle-activity users into preference-based types.
+            if e >= q_e_high and n <= q_n_low:
+                return 3  # Type3: Extreme
+            if b >= q_b_high:
+                return 4  # Type4: Positive
+            if b <= q_b_low:
+                return 5  # Type5: Negative
+            return 6  # Type6: Mixed
+
+        df_q["user_type"] = df_q.apply(classify_user, axis=1)
         df_q = df_q.set_index("user_id")
 
         df_user = df_user.join(df_q, how="left")
