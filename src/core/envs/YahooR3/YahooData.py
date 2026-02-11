@@ -119,11 +119,17 @@ class YahooData(BaseData):
         df_q["user_id"] = np.arange(len(df_q))
         df_q["has_survey"] = 1
         df_q["activity_level"] = df_q["rate_frequency"]
-        df_q["extreme_trigger"] = (df_q["rate_hate"] + df_q["rate_love"]) / 2
-        df_q["neutral_trigger"] = df_q["rate_neutral"]
-        df_q["positivity_bias"] = (df_q["rate_like"] + df_q["rate_love"]) / 2 - (
+        df_q["extreme_trigger_raw"] = (df_q["rate_hate"] + df_q["rate_love"]) / 2
+        df_q["neutral_trigger_raw"] = df_q["rate_neutral"]
+        df_q["positivity_bias_raw"] = (df_q["rate_like"] + df_q["rate_love"]) / 2 - (
             df_q["rate_hate"] + df_q["rate_dislike"]
         ) / 2
+        bias_offset = -df_q["positivity_bias_raw"].min()
+        if bias_offset < 0:
+            bias_offset = 0
+        df_q["extreme_trigger"] = df_q["extreme_trigger_raw"].round().astype(int)
+        df_q["neutral_trigger"] = df_q["neutral_trigger_raw"].round().astype(int)
+        df_q["positivity_bias"] = (df_q["positivity_bias_raw"] + bias_offset).round().astype(int)
         df_q["preference_sensitive"] = (df_q["preference_sensitive"] == 2).astype(int)
 
         # Quantile-based typing (computed on survey users only)
@@ -134,15 +140,15 @@ class YahooData(BaseData):
         ).reset_index(drop=True)
         df_rank["activity_rank_pct"] = (df_rank.index + 1) / len(df_rank)
         rank_pct_map = df_rank.set_index("user_id")["activity_rank_pct"].to_dict()
-        q_e_high = df_q["extreme_trigger"].quantile(0.8)
-        q_n_low = df_q["neutral_trigger"].quantile(0.2)
-        q_b_low, q_b_high = df_q["positivity_bias"].quantile([0.2, 0.8]).to_list()
+        q_e_high = df_q["extreme_trigger_raw"].quantile(0.8)
+        q_n_low = df_q["neutral_trigger_raw"].quantile(0.2)
+        q_b_low, q_b_high = df_q["positivity_bias_raw"].quantile([0.2, 0.8]).to_list()
 
         def classify_user(row):
             a = row["activity_level"]
-            e = row["extreme_trigger"]
-            n = row["neutral_trigger"]
-            b = row["positivity_bias"]
+            e = row["extreme_trigger_raw"]
+            n = row["neutral_trigger_raw"]
+            b = row["positivity_bias_raw"]
             rank_pct = rank_pct_map.get(row["user_id"], 0)
             if rank_pct >= 0.8:
                 return 2  # Type2: Active
@@ -158,6 +164,9 @@ class YahooData(BaseData):
             return 6  # Type6: Mixed
 
         df_q["user_type"] = df_q.apply(classify_user, axis=1)
+        df_q = df_q.drop(
+            columns=["extreme_trigger_raw", "neutral_trigger_raw", "positivity_bias_raw"]
+        )
         df_q = df_q.set_index("user_id")
 
         df_user = df_user.join(df_q, how="left")
