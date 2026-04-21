@@ -21,8 +21,8 @@ USER_TYPE_MAP = {
 }
 
 
-def compute_user_metrics(df_train: pd.DataFrame) -> pd.DataFrame:
-    grp = df_train.groupby("user_id")["rating"]
+def compute_user_metrics(df: pd.DataFrame, prefix: str) -> pd.DataFrame:
+    grp = df.groupby("user_id")["rating"]
     df_user_metrics = grp.agg(
         num_ratings="count",
         avg_rating="mean",
@@ -30,25 +30,61 @@ def compute_user_metrics(df_train: pd.DataFrame) -> pd.DataFrame:
     ).reset_index()
     df_user_metrics["high_rating_ratio"] = grp.apply(lambda x: (x >= 4).mean()).to_numpy()
     df_user_metrics["rating_std"] = df_user_metrics["rating_std"].fillna(0)
+    rename_map = {col: f"{prefix}_{col}" for col in ["num_ratings", "avg_rating", "rating_std", "high_rating_ratio"]}
+    df_user_metrics = df_user_metrics.rename(columns=rename_map)
     return df_user_metrics
 
 
-def summarize_by_group(df_user_all: pd.DataFrame, group_col: str) -> pd.DataFrame:
-    metrics = ["num_ratings", "avg_rating", "rating_std", "high_rating_ratio"]
+def add_analysis_groups(df_user_all: pd.DataFrame) -> pd.DataFrame:
+    df_user_all = df_user_all.copy()
+
+    df_user_all["activity_group"] = np.where(
+        df_user_all["rate_frequency"] == 5, "daily", "less_than_daily"
+    )
+    df_user_all["sensitivity_group"] = np.where(
+        df_user_all["preference_sensitive"] == 1,
+        "preference_affects",
+        "not_affects",
+    )
+    df_user_all["primary_group"] = (
+        df_user_all["activity_group"] + " + " + df_user_all["sensitivity_group"]
+    )
+
+    positivity_bias_raw = (
+        (df_user_all["rate_like"] + df_user_all["rate_love"]) / 2
+        - (df_user_all["rate_hate"] + df_user_all["rate_dislike"]) / 2
+    )
+    df_user_all["polarity_group"] = np.where(
+        positivity_bias_raw > 0,
+        "positive",
+        np.where(positivity_bias_raw < 0, "negative", "neutral"),
+    )
+
+    extreme_selective_mask = (
+        ((df_user_all["rate_hate"] + df_user_all["rate_love"]) / 2 >= 5)
+        & (df_user_all["rate_neutral"] <= 3)
+    )
+    df_user_all["extreme_group"] = np.where(
+        extreme_selective_mask, "extreme_selective", "other"
+    )
+
+    return df_user_all
+
+
+def summarize_by_group(df_user_all: pd.DataFrame, group_col: str, metrics: list[str]) -> pd.DataFrame:
     summary = df_user_all.groupby(group_col)[metrics].mean()
     summary["user_count"] = df_user_all.groupby(group_col)["user_id"].count()
     summary = summary.reset_index()
     return summary
 
 
-def compute_stats(df_user_all: pd.DataFrame, group_col: str) -> pd.DataFrame:
+def compute_stats(df_user_all: pd.DataFrame, group_col: str, metrics: list[str]) -> pd.DataFrame:
     try:
         from scipy import stats
     except ImportError:
         print("scipy is not available; skip statistical tests.")
         return pd.DataFrame()
 
-    metrics = ["num_ratings", "avg_rating", "rating_std", "high_rating_ratio"]
     results = []
     groups = [g for g in df_user_all[group_col].unique() if pd.notna(g)]
 
@@ -88,6 +124,27 @@ def compute_stats(df_user_all: pd.DataFrame, group_col: str) -> pd.DataFrame:
     return pd.DataFrame(results)
 
 
+def save_group_outputs(
+    df_user_all: pd.DataFrame,
+    group_col: str,
+    metrics: list[str],
+    out_dir: str,
+    stem: str,
+) -> None:
+    summary = summarize_by_group(df_user_all, group_col, metrics)
+    summary_path = os.path.join(out_dir, f"{stem}_summary.csv")
+    summary.to_csv(summary_path, index=False)
+    print(f"Saved group summary ({stem}):", summary_path)
+    print(f"\nGroup summary ({stem}):")
+    print(summary.to_string(index=False))
+
+    stats_df = compute_stats(df_user_all, group_col, metrics)
+    if not stats_df.empty:
+        stats_path = os.path.join(out_dir, f"{stem}_stats.csv")
+        stats_df.to_csv(stats_path, index=False)
+        print(f"Saved stats ({stem}):", stats_path)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -95,23 +152,24 @@ def main():
         type=str,
         default=os.path.join("visual_results", "yahoo_survey"),
     )
-    parser.add_argument(
-        "--only_survey",
-        action="store_true",
-        help="If set, only include users with survey answers (has_survey=1).",
-    )
     args = parser.parse_args()
 
     dataset = YahooData()
     df_train, df_user, _, _ = dataset.get_train_data()
+    df_test, _, _, _ = dataset.get_val_data()
 
-    df_user_metrics = compute_user_metrics(df_train)
-    df_user_all = df_user_metrics.merge(
+    df_train_metrics = compute_user_metrics(df_train, prefix="train")
+    df_test_metrics = compute_user_metrics(df_test, prefix="test")
+
+    df_user_all = df_train_metrics.merge(
+        df_test_metrics, on="user_id", how="outer"
+    ).merge(
         df_user.reset_index(), on="user_id", how="left"
     )
     df_user_all["has_survey"] = df_user_all["has_survey"].fillna(0).astype(int)
     df_user_all["user_type"] = df_user_all["user_type"].fillna(0).astype(int)
     df_user_all["user_type_label"] = df_user_all["user_type"].map(USER_TYPE_MAP)
+    df_user_all = add_analysis_groups(df_user_all)
 
     os.makedirs(args.out_dir, exist_ok=True)
     metrics_path = os.path.join(args.out_dir, "user_metrics.csv")
@@ -120,46 +178,38 @@ def main():
 
     print("Saved user-level metrics:", metrics_path)
 
-    type_counts_path = os.path.join(args.out_dir, "user_type_counts.csv")
-    df_user_all["user_type_label"].value_counts().rename_axis("user_type").reset_index(
-        name="user_count"
-    ).to_csv(type_counts_path, index=False)
-    print("Saved user type counts:", type_counts_path)
-
-    if args.only_survey:
-        df_survey = df_user_all[df_user_all["has_survey"] == 1].copy()
-        summary_survey = summarize_by_group(df_survey, "user_type_label")
-        summary_path = os.path.join(args.out_dir, "group_summary_survey_only.csv")
-        summary_survey.to_csv(summary_path, index=False)
-        print("Saved group summary (survey only):", summary_path)
-        print("\nGroup summary (survey only):")
-        print(summary_survey.to_string(index=False))
-        stats_df = compute_stats(df_survey, "user_type_label")
-        if not stats_df.empty:
-            stats_path = os.path.join(args.out_dir, "group_stats_survey_only.csv")
-            stats_df.to_csv(stats_path, index=False)
-            print("Saved stats (survey only):", stats_path)
-        return
-
-    summary_all = summarize_by_group(df_user_all, "user_type_label")
-    summary_path_all = os.path.join(args.out_dir, "group_summary_all.csv")
-    summary_all.to_csv(summary_path_all, index=False)
-    print("Saved group summary (all users):", summary_path_all)
-
     df_survey = df_user_all[df_user_all["has_survey"] == 1].copy()
-    summary_survey = summarize_by_group(df_survey, "user_type_label")
-    summary_path = os.path.join(args.out_dir, "group_summary_survey_only.csv")
-    summary_survey.to_csv(summary_path, index=False)
-    print("Saved group summary (survey only):", summary_path)
+    all_metrics = [
+        "train_num_ratings",
+        "train_avg_rating",
+        "train_rating_std",
+        "train_high_rating_ratio",
+        "test_num_ratings",
+        "test_avg_rating",
+        "test_rating_std",
+        "test_high_rating_ratio",
+    ]
 
-    print("\nGroup summary (survey only):")
-    print(summary_survey.to_string(index=False))
+    group_specs = [
+        ("primary_group", "primary_group"),
+        ("polarity_group", "polarity_group"),
+        ("extreme_group", "extreme_group"),
+        ("user_type_label", "legacy_user_type"),
+    ]
 
-    stats_df = compute_stats(df_survey, "user_type_label")
-    if not stats_df.empty:
-        stats_path = os.path.join(args.out_dir, "group_stats_survey_only.csv")
-        stats_df.to_csv(stats_path, index=False)
-        print("Saved stats (survey only):", stats_path)
+    for group_col, stem in group_specs:
+        counts_path = os.path.join(args.out_dir, f"{stem}_counts.csv")
+        df_survey[group_col].value_counts().rename_axis(group_col).reset_index(
+            name="user_count"
+        ).to_csv(counts_path, index=False)
+        print(f"Saved group counts ({stem}):", counts_path)
+        save_group_outputs(
+            df_user_all=df_survey,
+            group_col=group_col,
+            metrics=all_metrics,
+            out_dir=args.out_dir,
+            stem=stem,
+        )
 
 
 if __name__ == "__main__":

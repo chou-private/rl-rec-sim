@@ -19,6 +19,19 @@ class BaseData(ABC):
     def get_features(self, is_userinfo=True):
         pass
 
+    def get_sparse_user_features(self, is_userinfo=True):
+        user_features, _, _ = self.get_features(is_userinfo)
+        return user_features[1:] if len(user_features) > 1 else []
+
+    def get_dense_user_features(self, is_userinfo=True):
+        return []
+
+    def get_sparse_item_features(self):
+        return []
+
+    def get_dense_item_features(self):
+        return []
+
     def get_df(self, name=None):
         pass
 

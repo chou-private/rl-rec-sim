@@ -12,6 +12,19 @@ ROOTPATH = os.path.join(REPO_ROOT, "data", "YahooR3")
 DATAPATH = os.path.join(ROOTPATH, "data_raw")
 PRODATAPATH = os.path.join(ROOTPATH, "data_processed")
 
+YAHOO_GROUP_MAPS = {
+    "activity_group": {"less_than_daily": 0, "daily": 1},
+    "sensitivity_group": {"not_affects": 0, "preference_affects": 1},
+    "primary_group": {
+        "daily + preference_affects": 0,
+        "daily + not_affects": 1,
+        "less_than_daily + preference_affects": 2,
+        "less_than_daily + not_affects": 3,
+    },
+    "polarity_group": {"negative": 0, "neutral": 1, "positive": 2},
+    "extreme_group": {"other": 0, "extreme_selective": 1},
+}
+
 for path in [PRODATAPATH]:
     if not os.path.exists(path):
         os.makedirs(path, exist_ok=True)
@@ -24,19 +37,44 @@ class YahooData(BaseData):
         self.val_data_path = "ydata-ymusic-rating-study-v1_0-test.txt"
         self.questionnaire_path = "ydata-ymusic-rating-study-v1_0-survey-answers.txt"
         self.only_survey = True
+        self.user_sparse_features = [
+            "activity_level",
+            "rate_hate",
+            "rate_dislike",
+            "rate_neutral",
+            "rate_like",
+            "rate_love",
+            "preference_sensitive",
+            "activity_group",
+            "sensitivity_group",
+            "primary_group",
+            "polarity_group",
+            "extreme_group",
+        ]
+        self.user_dense_features = [
+            "activity_level_norm",
+            "extreme_trigger_raw",
+            "neutral_trigger_raw",
+            "positivity_bias_raw",
+        ]
         
     def get_features(self, is_userinfo=None):
-        user_features = [
-            "user_id",
-            "activity_level",
-            "extreme_trigger",
-            "neutral_trigger",
-            "positivity_bias",
-            "user_type",
-        ]
+        user_features = ["user_id"] + self.user_sparse_features + self.user_dense_features
+        if is_userinfo is False:
+            user_features = ["user_id"]
         item_features = ['item_id']
         reward_features = ["rating"]
         return user_features, item_features, reward_features
+
+    def get_sparse_user_features(self, is_userinfo=True):
+        if not is_userinfo:
+            return []
+        return self.user_sparse_features
+
+    def get_dense_user_features(self, is_userinfo=True):
+        if not is_userinfo:
+            return []
+        return self.user_dense_features
 
     def get_df(self, name="ydata-ymusic-rating-study-v1_0-train.txt"):
         # read interaction
@@ -124,6 +162,7 @@ class YahooData(BaseData):
         df_q["positivity_bias_raw"] = (df_q["rate_like"] + df_q["rate_love"]) / 2 - (
             df_q["rate_hate"] + df_q["rate_dislike"]
         ) / 2
+        df_q["activity_level_norm"] = (df_q["activity_level"] - 1) / 4.0
         bias_offset = -df_q["positivity_bias_raw"].min()
         if bias_offset < 0:
             bias_offset = 0
@@ -163,14 +202,47 @@ class YahooData(BaseData):
                 return 5  # Type5: Negative
             return 6  # Type6: Mixed
 
-        df_q["user_type"] = df_q.apply(classify_user, axis=1)
-        df_q = df_q.drop(
-            columns=["extreme_trigger_raw", "neutral_trigger_raw", "positivity_bias_raw"]
+        df_q["activity_group_label"] = np.where(
+            df_q["rate_frequency"] == 5, "daily", "less_than_daily"
         )
+        df_q["sensitivity_group_label"] = np.where(
+            df_q["preference_sensitive"] == 1, "preference_affects", "not_affects"
+        )
+        df_q["primary_group_label"] = (
+            df_q["activity_group_label"] + " + " + df_q["sensitivity_group_label"]
+        )
+        df_q["polarity_group_label"] = np.where(
+            df_q["positivity_bias_raw"] > 0,
+            "positive",
+            np.where(df_q["positivity_bias_raw"] < 0, "negative", "neutral"),
+        )
+        extreme_selective_mask = (
+            ((df_q["rate_hate"] + df_q["rate_love"]) / 2 >= 5)
+            & (df_q["rate_neutral"] <= 3)
+        )
+        df_q["extreme_group_label"] = np.where(
+            extreme_selective_mask, "extreme_selective", "other"
+        )
+        for feat_name, mapping in YAHOO_GROUP_MAPS.items():
+            label_col = f"{feat_name}_label"
+            df_q[feat_name] = df_q[label_col].map(mapping).astype(int)
+
+        df_q["user_type"] = df_q.apply(classify_user, axis=1)
         df_q = df_q.set_index("user_id")
 
         df_user = df_user.join(df_q, how="left")
-        df_user = df_user.fillna(0).astype(int)
+        float_cols = [
+            "extreme_trigger_raw",
+            "neutral_trigger_raw",
+            "positivity_bias_raw",
+            "activity_level_norm",
+        ]
+        int_cols = [col for col in df_user.columns if col not in float_cols and not col.endswith("_label")]
+
+        df_user[float_cols] = df_user[float_cols].fillna(0.0).astype(float)
+        df_user[int_cols] = df_user[int_cols].fillna(0).astype(int)
+        for col in [c for c in df_user.columns if c.endswith("_label")]:
+            df_user[col] = df_user[col].fillna("missing")
         return df_user
 
     def load_item_feat(self):

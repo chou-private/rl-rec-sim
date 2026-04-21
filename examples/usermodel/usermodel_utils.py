@@ -188,7 +188,7 @@ def load_dataset_train(args, dataset, tau, entity_dim, feature_dim, MODEL_SAVE_P
     df_user = df_user[user_features[1:]]
     df_item = df_item[item_features[1:]]
 
-    x_columns, y_columns, ab_columns = get_xy_columns(args, df_train, df_user, df_item, user_features, item_features, entity_dim, feature_dim)
+    x_columns, y_columns, ab_columns = get_xy_columns(args, dataset, df_train, df_user, df_item, user_features, item_features, entity_dim, feature_dim)
 
     neg_in_train = True if args.env == "KuaiRand-v0" and reward_features[0] != "watch_ratio_normed" else False
     neg_in_train = False  # todo: test for kuairand
@@ -231,7 +231,7 @@ def load_dataset_train_IPS(args, dataset, tau, entity_dim, feature_dim, MODEL_SA
     df_user = df_user[user_features[1:]]
     df_item = df_item[item_features[1:]]
 
-    x_columns, y_columns, ab_columns = get_xy_columns(args, df_train, df_user, df_item, user_features, item_features,
+    x_columns, y_columns, ab_columns = get_xy_columns(args, dataset, df_train, df_user, df_item, user_features, item_features,
                                                       entity_dim, feature_dim)
 
     neg_in_train = True if args.env == "KuaiRand-v0" and reward_features[0] != "watch_ratio_normed" else False
@@ -286,7 +286,7 @@ def load_dataset_val(args, dataset, entity_dim, feature_dim):
     else:
         df_y = df_val[reward_features]
 
-    x_columns, y_columns, ab_columns = get_xy_columns(args, df_val, df_user_val, df_item_val, user_features,
+    x_columns, y_columns, ab_columns = get_xy_columns(args, dataset, df_val, df_user_val, df_item_val, user_features,
                                                       item_features,
                                                       entity_dim, feature_dim)
 
@@ -362,7 +362,7 @@ def get_task(envname, yfeat):
     return task, task_logit_dim, is_ranking
 
 
-def get_xy_columns(args, df_data, df_user, df_item, user_features, item_features, entity_dim, feature_dim):
+def get_xy_columns(args, dataset, df_data, df_user, df_item, user_features, item_features, entity_dim, feature_dim):
     if args.env == "KuaiRand-v0" or args.env == "KuaiEnv-v0":
         feat = [x for x in df_item.columns if x[:4] == "feat"]
         x_columns = [SparseFeatP("user_id", df_data['user_id'].max() + 1, embedding_dim=entity_dim)] + \
@@ -387,10 +387,32 @@ def get_xy_columns(args, df_data, df_user, df_item, user_features, item_features
                                  padding_idx=0  # using padding_idx in embedding!
                                  ) for x in feat]
     else: # For Yahoo and Coat dataset
+        sparse_user_features = set(dataset.get_sparse_user_features(args.is_userinfo))
+        dense_user_features = set(dataset.get_dense_user_features(args.is_userinfo))
+        sparse_item_features = set(dataset.get_sparse_item_features())
+        dense_item_features = set(dataset.get_dense_item_features())
+
+        user_sparse_columns = [
+            SparseFeatP(col, df_user[col].max() + 1, embedding_dim=feature_dim)
+            for col in user_features[1:] if col in sparse_user_features
+        ]
+        user_dense_columns = [
+            DenseFeat(col, 1)
+            for col in user_features[1:] if col in dense_user_features
+        ]
+        item_sparse_columns = [
+            SparseFeatP(col, df_item[col].max() + 1, embedding_dim=feature_dim)
+            for col in item_features[1:] if col in sparse_item_features or (not sparse_item_features and col not in dense_item_features)
+        ]
+        item_dense_columns = [
+            DenseFeat(col, 1)
+            for col in item_features[1:] if col in dense_item_features
+        ]
+
         x_columns = [SparseFeatP("user_id", df_data['user_id'].max() + 1, embedding_dim=entity_dim)] + \
-                    [SparseFeatP(col, df_user[col].max() + 1, embedding_dim=feature_dim) for col in user_features[1:]] + \
+                    user_sparse_columns + user_dense_columns + \
                     [SparseFeatP("item_id", df_data['item_id'].max() + 1, embedding_dim=entity_dim)] + \
-                    [SparseFeatP(col, df_item[col].max() + 1, embedding_dim=feature_dim) for col in item_features[1:]]
+                    item_sparse_columns + item_dense_columns
 
     ab_columns = [SparseFeatP("alpha_u", df_data['user_id'].max() + 1, embedding_dim=1)] + \
                  [SparseFeatP("beta_i", df_data['item_id'].max() + 1, embedding_dim=1)]
