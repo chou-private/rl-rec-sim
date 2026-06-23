@@ -23,6 +23,14 @@ from usermodel_utils import get_datapath, prepare_dir_log, load_dataset_train, l
 import os
 os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 
+
+def get_feature_column_by_name(x_columns, feature_name):
+    for col in x_columns:
+        if getattr(col, "name", None) == feature_name:
+            return col
+    raise ValueError(f"Feature column not found: {feature_name}")
+
+
 def prepare_dataset(args, dataset, MODEL_SAVE_PATH, DATAPATH):
     dataset_train, df_user, df_item, x_columns, y_columns, ab_columns = \
         load_dataset_train(args, dataset, args.tau, args.entity_dim, args.feature_dim, MODEL_SAVE_PATH, DATAPATH)
@@ -30,8 +38,10 @@ def prepare_dataset(args, dataset, MODEL_SAVE_PATH, DATAPATH):
         ab_columns = None
 
     dataset_val, df_user_val, df_item_val = load_dataset_val(args, dataset, args.entity_dim, args.feature_dim)
-    
-    assert dataset_train.x_columns[1].vocabulary_size >= dataset_val.x_columns[1].vocabulary_size  # item_ids of training set should cover the test set!
+
+    train_item_col = get_feature_column_by_name(dataset_train.x_columns, "item_id")
+    val_item_col = get_feature_column_by_name(dataset_val.x_columns, "item_id")
+    assert train_item_col.vocabulary_size >= val_item_col.vocabulary_size  # item_ids of training set should cover the test set!
 
     return dataset_train, dataset_val, df_user, df_item, df_user_val, df_item_val, x_columns, y_columns, ab_columns
 
