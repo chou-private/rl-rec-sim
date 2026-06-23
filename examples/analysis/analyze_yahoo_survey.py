@@ -29,8 +29,43 @@ def compute_user_metrics(df: pd.DataFrame, prefix: str) -> pd.DataFrame:
         rating_std="std",
     ).reset_index()
     df_user_metrics["high_rating_ratio"] = grp.apply(lambda x: (x >= 4).mean()).to_numpy()
+    rating_dist = (
+        df.pivot_table(
+            index="user_id",
+            columns="rating",
+            values="item_id",
+            aggfunc="count",
+            fill_value=0,
+        )
+        .reindex(columns=[1, 2, 3, 4, 5], fill_value=0)
+        .astype(float)
+    )
+    rating_dist = rating_dist.div(rating_dist.sum(axis=1), axis=0).fillna(0)
+    rating_dist.columns = [
+        "hate_ratio",
+        "dislike_ratio",
+        "neutral_ratio",
+        "like_ratio",
+        "love_ratio",
+    ]
+    df_user_metrics = df_user_metrics.merge(
+        rating_dist.reset_index(), on="user_id", how="left"
+    )
     df_user_metrics["rating_std"] = df_user_metrics["rating_std"].fillna(0)
-    rename_map = {col: f"{prefix}_{col}" for col in ["num_ratings", "avg_rating", "rating_std", "high_rating_ratio"]}
+    rename_map = {
+        col: f"{prefix}_{col}"
+        for col in [
+            "num_ratings",
+            "avg_rating",
+            "rating_std",
+            "high_rating_ratio",
+            "hate_ratio",
+            "dislike_ratio",
+            "neutral_ratio",
+            "like_ratio",
+            "love_ratio",
+        ]
+    }
     df_user_metrics = df_user_metrics.rename(columns=rename_map)
     return df_user_metrics
 
@@ -184,10 +219,20 @@ def main():
         "train_avg_rating",
         "train_rating_std",
         "train_high_rating_ratio",
+        "train_hate_ratio",
+        "train_dislike_ratio",
+        "train_neutral_ratio",
+        "train_like_ratio",
+        "train_love_ratio",
         "test_num_ratings",
         "test_avg_rating",
         "test_rating_std",
         "test_high_rating_ratio",
+        "test_hate_ratio",
+        "test_dislike_ratio",
+        "test_neutral_ratio",
+        "test_like_ratio",
+        "test_love_ratio",
     ]
 
     group_specs = [

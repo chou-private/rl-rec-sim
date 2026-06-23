@@ -25,6 +25,33 @@ YAHOO_GROUP_MAPS = {
     "extreme_group": {"other": 0, "extreme_selective": 1},
 }
 
+YAHOO_GAN_PROFILE_COLUMN_MAP = {
+    "rate_frequency": "gan_rate_frequency",
+    "rate_hate": "gan_rate_hate",
+    "rate_dislike": "gan_rate_dislike",
+    "rate_neutral": "gan_rate_neutral",
+    "rate_like": "gan_rate_like",
+    "rate_love": "gan_rate_love",
+    "preference_sensitive": "gan_preference_sensitive",
+    "train_hate_ratio": "gan_hate_ratio",
+    "train_dislike_ratio": "gan_dislike_ratio",
+    "train_neutral_ratio": "gan_neutral_ratio",
+    "train_like_ratio": "gan_like_ratio",
+    "train_love_ratio": "gan_love_ratio",
+    "train_avg_rating": "gan_avg_rating",
+    "train_rating_std": "gan_rating_std",
+    "train_high_rating_ratio": "gan_high_rating_ratio",
+}
+
+YAHOO_GAN_PROFILE_FEATURES = list(YAHOO_GAN_PROFILE_COLUMN_MAP.values())
+
+DEFAULT_GAN_PROFILE_PATH = os.path.join(
+    REPO_ROOT,
+    "visual_results",
+    "yahoo_survey_gan_profile",
+    "generated_survey_profile.csv",
+)
+
 for path in [PRODATAPATH]:
     if not os.path.exists(path):
         os.makedirs(path, exist_ok=True)
@@ -37,26 +64,11 @@ class YahooData(BaseData):
         self.val_data_path = "ydata-ymusic-rating-study-v1_0-test.txt"
         self.questionnaire_path = "ydata-ymusic-rating-study-v1_0-survey-answers.txt"
         self.only_survey = True
-        self.user_sparse_features = [
-            "activity_level",
-            "rate_hate",
-            "rate_dislike",
-            "rate_neutral",
-            "rate_like",
-            "rate_love",
-            "preference_sensitive",
-            "activity_group",
-            "sensitivity_group",
-            "primary_group",
-            "polarity_group",
-            "extreme_group",
-        ]
-        self.user_dense_features = [
-            "activity_level_norm",
-            "extreme_trigger_raw",
-            "neutral_trigger_raw",
-            "positivity_bias_raw",
-        ]
+        self.gan_profile_path = os.environ.get(
+            "YAHOO_GAN_PROFILE_PATH", DEFAULT_GAN_PROFILE_PATH
+        )
+        self.user_sparse_features = []
+        self.user_dense_features = self._infer_gan_profile_features()
         
     def get_features(self, is_userinfo=None):
         user_features = ["user_id"] + self.user_sparse_features + self.user_dense_features
@@ -75,6 +87,15 @@ class YahooData(BaseData):
         if not is_userinfo:
             return []
         return self.user_dense_features
+
+    def _infer_gan_profile_features(self):
+        if not os.path.isfile(self.gan_profile_path):
+            return YAHOO_GAN_PROFILE_FEATURES
+        columns = pd.read_csv(self.gan_profile_path, nrows=0).columns
+        inferred = [
+            dst for src, dst in YAHOO_GAN_PROFILE_COLUMN_MAP.items() if src in columns
+        ]
+        return inferred or YAHOO_GAN_PROFILE_FEATURES
 
     def get_df(self, name="ydata-ymusic-rating-study-v1_0-train.txt"):
         # read interaction
@@ -231,19 +252,73 @@ class YahooData(BaseData):
         df_q = df_q.set_index("user_id")
 
         df_user = df_user.join(df_q, how="left")
+        df_user = self._join_gan_profiles(df_user)
         float_cols = [
             "extreme_trigger_raw",
             "neutral_trigger_raw",
             "positivity_bias_raw",
             "activity_level_norm",
-        ]
+        ] + YAHOO_GAN_PROFILE_FEATURES
         int_cols = [col for col in df_user.columns if col not in float_cols and not col.endswith("_label")]
 
-        df_user[float_cols] = df_user[float_cols].fillna(0.0).astype(float)
+        existing_float_cols = [col for col in float_cols if col in df_user.columns]
+        df_user[existing_float_cols] = df_user[existing_float_cols].fillna(0.0).astype(float)
         df_user[int_cols] = df_user[int_cols].fillna(0).astype(int)
         for col in [c for c in df_user.columns if c.endswith("_label")]:
             df_user[col] = df_user[col].fillna("missing")
         return df_user
+
+    def _join_gan_profiles(self, df_user):
+        if not os.path.isfile(self.gan_profile_path):
+            raise FileNotFoundError(
+                "GAN profile file not found. Set YAHOO_GAN_PROFILE_PATH or run "
+                "examples/gan/run_yahoo_survey_profile_cgan.py first: "
+                f"{self.gan_profile_path}"
+            )
+
+        profile_df = pd.read_csv(self.gan_profile_path)
+        available_map = {
+            src: dst for src, dst in YAHOO_GAN_PROFILE_COLUMN_MAP.items() if src in profile_df.columns
+        }
+        if not available_map:
+            raise ValueError(
+                "GAN profile file must contain survey profile columns or behavior profile columns."
+            )
+        profile_df = profile_df.rename(columns=available_map)
+        profile_cols = list(available_map.values())
+        missing_profile_cols = [
+            col for col in self.user_dense_features if col not in profile_cols
+        ]
+        for col in missing_profile_cols:
+            profile_df[col] = 0.0
+        profile_cols = self.user_dense_features
+
+        if "user_id" in profile_df.columns:
+            profile_df = profile_df[["user_id"] + profile_cols].drop_duplicates("user_id")
+            return df_user.join(profile_df.set_index("user_id"), how="left")
+
+        if "primary_group" not in profile_df.columns:
+            raise ValueError("GAN profile file must contain either user_id or primary_group.")
+
+        rng = np.random.default_rng(2026)
+        sampled_rows = []
+        survey_users = df_user[df_user.index < 5400].copy()
+        for group in YAHOO_GROUP_MAPS["primary_group"]:
+            user_ids = survey_users.index[survey_users["primary_group_label"] == group].to_numpy()
+            candidates = profile_df.loc[profile_df["primary_group"] == group, profile_cols]
+            if len(user_ids) == 0:
+                continue
+            if candidates.empty:
+                raise ValueError(f"No GAN profile rows found for primary_group={group}")
+            sampled_idx = rng.choice(candidates.index.to_numpy(), size=len(user_ids), replace=True)
+            sampled = candidates.loc[sampled_idx].reset_index(drop=True)
+            sampled["user_id"] = user_ids
+            sampled_rows.append(sampled)
+
+        if not sampled_rows:
+            return df_user
+        sampled_profiles = pd.concat(sampled_rows, ignore_index=True)
+        return df_user.join(sampled_profiles.set_index("user_id"), how="left")
 
     def load_item_feat(self):
         df_item = pd.DataFrame(np.arange(1000), columns=["item_id"])
