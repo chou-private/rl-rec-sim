@@ -67,8 +67,13 @@ class YahooData(BaseData):
         self.gan_profile_path = os.environ.get(
             "YAHOO_GAN_PROFILE_PATH", DEFAULT_GAN_PROFILE_PATH
         )
+        self.use_gan_profile = os.environ.get(
+            "YAHOO_DISABLE_GAN_PROFILE", "0"
+        ).lower() not in {"1", "true", "yes"}
         self.user_sparse_features = []
-        self.user_dense_features = self._infer_gan_profile_features()
+        self.user_dense_features = (
+            self._infer_gan_profile_features() if self.use_gan_profile else []
+        )
         
     def get_features(self, is_userinfo=None):
         user_features = ["user_id"] + self.user_sparse_features + self.user_dense_features
@@ -252,7 +257,8 @@ class YahooData(BaseData):
         df_q = df_q.set_index("user_id")
 
         df_user = df_user.join(df_q, how="left")
-        df_user = self._join_gan_profiles(df_user)
+        if self.use_gan_profile:
+            df_user = self._join_gan_profiles(df_user)
         float_cols = [
             "extreme_trigger_raw",
             "neutral_trigger_raw",

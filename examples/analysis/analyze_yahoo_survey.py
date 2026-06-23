@@ -5,6 +5,8 @@ import sys
 import numpy as np
 import pandas as pd
 
+os.environ.setdefault("YAHOO_DISABLE_GAN_PROFILE", "1")
+
 sys.path.extend([".", "./src", "./src/DeepCTR-Torch"])
 
 from src.core.envs.YahooR3.YahooData import YahooData
