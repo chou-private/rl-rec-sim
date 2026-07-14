@@ -25,6 +25,14 @@ class YahooData(BaseData):
         
     def get_features(self, is_userinfo=None):
         user_features = ["user_id"]
+        if is_userinfo:
+            user_features += [
+                "activity_score",
+                "preference_sensitivity_score",
+                "positivity_bias",
+                "extreme_rating_tendency",
+                "neutral_tendency",
+            ]
         item_features = ['item_id']
         reward_features = ["rating"]
         return user_features, item_features, reward_features
@@ -32,13 +40,15 @@ class YahooData(BaseData):
     def get_df(self, name="ydata-ymusic-rating-study-v1_0-train.txt"):
         # read interaction
         filename = os.path.join(DATAPATH, name)
-        df_data = pd.read_csv(filename, sep="\s+", header=None, names=["user_id", "item_id", "rating"])
+        df_data = pd.read_csv(filename, sep=r"\s+", header=None, names=["user_id", "item_id", "rating"])
 
         df_data["user_id"] -= 1
         df_data["item_id"] -= 1
 
         df_user = self.load_user_feat()
         df_item = self.load_item_feat()
+        df_data = df_data.join(df_user, on="user_id", how="left")
+        df_data = df_data.join(df_item, on="item_id", how="left")
         list_feat = None
 
         return df_data, df_user, df_item, list_feat
@@ -84,8 +94,50 @@ class YahooData(BaseData):
 
     def load_user_feat(self):
         df_user = pd.DataFrame(np.arange(15400), columns=["user_id"])
+        df_traits = self.load_survey_traits()
+        df_user = df_user.merge(df_traits, how="left", on="user_id")
+        trait_cols = [col for col in df_traits.columns if col != "user_id"]
+        df_user[trait_cols] = df_user[trait_cols].fillna(df_traits[trait_cols].mean())
         df_user.set_index("user_id", inplace=True)
         return df_user
+
+    def load_survey_traits(self):
+        survey_path = os.path.join(DATAPATH, "ydata-ymusic-rating-study-v1_0-survey-answers.txt")
+        columns = [
+            "activity_level",
+            "rate_hate",
+            "rate_dislike",
+            "rate_neutral",
+            "rate_like",
+            "rate_love",
+            "preference_affect_answer",
+        ]
+        df = pd.read_csv(survey_path, sep=r"\s+", header=None, names=columns)
+        df["user_id"] = np.arange(len(df))
+
+        for col in [
+            "activity_level",
+            "rate_hate",
+            "rate_dislike",
+            "rate_neutral",
+            "rate_like",
+            "rate_love",
+        ]:
+            df[col + "_norm"] = (df[col].astype(float) - 1.0) / 4.0
+
+        positive_score = (df["rate_like_norm"] + df["rate_love_norm"]) / 2.0
+        negative_score = (df["rate_hate_norm"] + df["rate_dislike_norm"]) / 2.0
+
+        traits = pd.DataFrame({
+            "user_id": df["user_id"],
+            "activity_score": df["activity_level_norm"],
+            # 1 means preferences do not affect rating choice; 2 means preferences do affect it.
+            "preference_sensitivity_score": df["preference_affect_answer"].astype(float) - 1.0,
+            "positivity_bias": positive_score - negative_score,
+            "extreme_rating_tendency": (df["rate_hate_norm"] + df["rate_love_norm"]) / 2.0,
+            "neutral_tendency": df["rate_neutral_norm"],
+        })
+        return traits
 
     def load_item_feat(self):
         df_item = pd.DataFrame(np.arange(1000), columns=["item_id"])
@@ -97,7 +149,7 @@ class YahooData(BaseData):
     def load_mat():
         # Note: The data file `yahoo_pseudoGT_ratingM.ascii` is sourced from the https://github.com/BetsyHJ/RL4Rec repository.
         filename_GT = os.path.join(DATAPATH, "RL4Rec_data", "yahoo_pseudoGT_ratingM.ascii")
-        mat = pd.read_csv(filename_GT, sep="\s+", header=None, dtype=str).to_numpy(dtype=int)
+        mat = pd.read_csv(filename_GT, sep=r"\s+", header=None, dtype=str).to_numpy(dtype=int)
         return mat
 
 

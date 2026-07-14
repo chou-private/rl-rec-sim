@@ -387,8 +387,14 @@ def get_xy_columns(args, df_data, df_user, df_item, user_features, item_features
                                  padding_idx=0  # using padding_idx in embedding!
                                  ) for x in feat]
     else: # For Yahoo and Coat dataset
+        user_feature_columns = []
+        for col in user_features[1:]:
+            if col in df_user.columns and pd.api.types.is_float_dtype(df_user[col]):
+                user_feature_columns.append(DenseFeat(col, 1))
+            else:
+                user_feature_columns.append(SparseFeatP(col, df_user[col].max() + 1, embedding_dim=feature_dim))
         x_columns = [SparseFeatP("user_id", df_data['user_id'].max() + 1, embedding_dim=entity_dim)] + \
-                    [SparseFeatP(col, df_user[col].max() + 1, embedding_dim=feature_dim) for col in user_features[1:]] + \
+                    user_feature_columns + \
                     [SparseFeatP("item_id", df_data['item_id'].max() + 1, embedding_dim=entity_dim)] + \
                     [SparseFeatP(col, df_item[col].max() + 1, embedding_dim=feature_dim) for col in item_features[1:]]
 
