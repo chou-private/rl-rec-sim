@@ -39,9 +39,12 @@ def get_args_DQN():
     parser.add_argument("--prioritized-replay", action="store_true", default=False)
     parser.add_argument("--alpha", type=float, default=0.6)
     parser.add_argument("--beta", type=float, default=0.4)
-    parser.add_argument("--message", type=str, default="DQN-survey-aware-leave")
+    parser.add_argument("--message", type=str, default="DQN-survey-aware-reward")
     parser.add_argument("--lambda_leave_penalty", type=float, default=1.0)
-    parser.add_argument("--survey_beta", type=float, default=1.0)
+    parser.add_argument("--survey_positive_alpha", type=float, default=1.0)
+    parser.add_argument("--survey_negative_beta", type=float, default=1.0)
+    parser.add_argument("--positive_rating_threshold", type=float, default=4.0)
+    parser.add_argument("--negative_rating_threshold", type=float, default=2.0)
     return parser.parse_known_args()[0]
 
 
@@ -58,7 +61,10 @@ def prepare_survey_aware_train_envs(args, ensemble_models, env, kwargs_um):
         "task_name": args.env,
         "predicted_mat": predicted_mat,
         "lambda_leave_penalty": args.lambda_leave_penalty,
-        "survey_beta": args.survey_beta,
+        "survey_positive_alpha": args.survey_positive_alpha,
+        "survey_negative_beta": args.survey_negative_beta,
+        "positive_rating_threshold": args.positive_rating_threshold,
+        "negative_rating_threshold": args.negative_rating_threshold,
     }
 
     random.seed(args.seed)

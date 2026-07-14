@@ -7,32 +7,39 @@ from src.core.envs.Simulated_Env.base import BaseSimulatedEnv
 
 
 class SurveyAwareLeaveSimulatedEnv(BaseSimulatedEnv):
-    """Adds a survey-based leave-risk penalty to the simulated reward.
+    """Adds survey-based reward sensitivity and a fixed leave-risk penalty.
 
-    The real leave condition is unchanged. Survey answers only control how
-    strongly near-leave behavior is penalized during policy learning.
+    The real leave condition is unchanged. Survey answers control how strongly
+    positive and negative predicted ratings affect the reward during policy
+    learning.
     """
 
     def __init__(
         self,
         *args,
         lambda_leave_penalty=1.0,
-        survey_beta=1.0,
+        survey_positive_alpha=1.0,
+        survey_negative_beta=1.0,
+        positive_rating_threshold=4.0,
+        negative_rating_threshold=2.0,
         survey_path=None,
         **kwargs,
     ):
         self.lambda_leave_penalty = lambda_leave_penalty
-        self.survey_beta = survey_beta
+        self.survey_positive_alpha = survey_positive_alpha
+        self.survey_negative_beta = survey_negative_beta
+        self.positive_rating_threshold = positive_rating_threshold
+        self.negative_rating_threshold = negative_rating_threshold
         self.survey_path = survey_path or os.path.join(
             "data",
             "YahooR3",
             "data_raw",
             "ydata-ymusic-rating-study-v1_0-survey-answers.txt",
         )
-        self.user_reactivity = self._load_user_reactivity()
+        self.user_survey_scores = self._load_user_survey_scores()
         super().__init__(*args, **kwargs)
 
-    def _load_user_reactivity(self):
+    def _load_user_survey_scores(self):
         if not os.path.isfile(self.survey_path):
             return None
 
@@ -51,16 +58,21 @@ class SurveyAwareLeaveSimulatedEnv(BaseSimulatedEnv):
             ],
             dtype=float,
         )
-        reaction_cols = ["rate_hate", "rate_dislike", "rate_like", "rate_love"]
-        reaction = ((survey[reaction_cols] - 1.0) / 4.0).clip(0.0, 1.0).mean(axis=1)
-        return reaction.to_numpy(dtype=float)
+        norm = ((survey - 1.0) / 4.0).clip(0.0, 1.0)
+        pos_score = norm[["rate_like", "rate_love"]].mean(axis=1)
+        neg_score = norm[["rate_hate", "rate_dislike"]].mean(axis=1)
+        return {
+            "positive": pos_score.to_numpy(dtype=float),
+            "negative": neg_score.to_numpy(dtype=float),
+        }
 
-    def _get_reactivity(self, user_id):
-        if self.user_reactivity is None:
+    def _get_user_score(self, user_id, score_name):
+        if self.user_survey_scores is None:
             return 0.0
-        if user_id < 0 or user_id >= len(self.user_reactivity):
-            return float(np.nanmean(self.user_reactivity))
-        return float(self.user_reactivity[user_id])
+        scores = self.user_survey_scores[score_name]
+        if user_id < 0 or user_id >= len(scores):
+            return float(np.nanmean(scores))
+        return float(scores[user_id])
 
     def _compute_leave_risk(self, action):
         threshold = float(self.env_task.leave_threshold)
@@ -87,18 +99,37 @@ class SurveyAwareLeaveSimulatedEnv(BaseSimulatedEnv):
         min_distance = float(dist_list.min())
         return max(0.0, (threshold - min_distance) / threshold)
 
+    def _apply_survey_reward_sensitivity(self, pred_reward):
+        raw_rating = pred_reward + self.MIN_R
+        user_id = int(self.cur_user)
+        pos_score = self._get_user_score(user_id, "positive")
+        neg_score = self._get_user_score(user_id, "negative")
+
+        if raw_rating >= self.positive_rating_threshold:
+            reward = pred_reward * (1.0 + self.survey_positive_alpha * pos_score)
+        elif raw_rating <= self.negative_rating_threshold:
+            reward = pred_reward - self.survey_negative_beta * neg_score
+        else:
+            reward = pred_reward
+
+        return reward, raw_rating, pos_score, neg_score
+
     def step(self, action):
         leave_risk = self._compute_leave_risk(action)
         state, pred_reward, terminated, truncated, info = super().step(action)
 
-        reactivity = self._get_reactivity(int(self.cur_user))
-        user_lambda = self.lambda_leave_penalty * (1.0 + self.survey_beta * reactivity)
-        reward = pred_reward - user_lambda * leave_risk
+        survey_reward, raw_rating, pos_score, neg_score = self._apply_survey_reward_sensitivity(
+            pred_reward
+        )
+        reward = survey_reward - self.lambda_leave_penalty * leave_risk
 
         self.cum_reward += reward - pred_reward
         info["cum_reward"] = self.cum_reward
         info["pred_reward"] = pred_reward
+        info["raw_rating"] = raw_rating
+        info["survey_reward"] = survey_reward
         info["leave_risk"] = leave_risk
-        info["survey_reactivity"] = reactivity
-        info["lambda_leave"] = user_lambda
+        info["survey_positive_score"] = pos_score
+        info["survey_negative_score"] = neg_score
+        info["lambda_leave"] = self.lambda_leave_penalty
         return state, reward, terminated, truncated, info
