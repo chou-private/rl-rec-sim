@@ -16,6 +16,7 @@ class BaseSimulatedEnv(gym.Env):
                  lambda_leave_penalty=1.0,
                  survey_positive_alpha=1.0,
                  survey_negative_beta=1.0,
+                 leave_risk_discount=1.0,
                  positive_rating_threshold=4.0,
                  negative_rating_threshold=2.0,
                  ):
@@ -32,6 +33,7 @@ class BaseSimulatedEnv(gym.Env):
         self.lambda_leave_penalty = lambda_leave_penalty
         self.survey_positive_alpha = survey_positive_alpha
         self.survey_negative_beta = survey_negative_beta
+        self.leave_risk_discount = leave_risk_discount
         self.positive_rating_threshold = positive_rating_threshold
         self.negative_rating_threshold = negative_rating_threshold
 
@@ -149,7 +151,8 @@ class BaseSimulatedEnv(gym.Env):
             survey_reward -= self.survey_negative_beta * negative_score
 
         leave_risk = self._compute_leave_risk(t, action)
-        return survey_reward - self.lambda_leave_penalty * leave_risk
+        leave_discount = max(0.0, 1.0 - self.leave_risk_discount * leave_risk)
+        return survey_reward * leave_discount - self.lambda_leave_penalty * leave_risk
 
     def _compute_training_reward(self, action, t):
         pred_reward = self._compute_pred_reward(action)

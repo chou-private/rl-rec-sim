@@ -101,6 +101,7 @@ def get_args_all(trainer="onpolicy"):
     parser.add_argument("--lambda_leave_penalty", type=float, default=1.0)
     parser.add_argument("--survey_positive_alpha", type=float, default=1.0)
     parser.add_argument("--survey_negative_beta", type=float, default=1.0)
+    parser.add_argument("--leave_risk_discount", type=float, default=1.0)
     parser.add_argument("--positive_rating_threshold", type=float, default=4.0)
     parser.add_argument("--negative_rating_threshold", type=float, default=2.0)
 
@@ -204,6 +205,7 @@ def prepare_train_envs(args, ensemble_models, env, kwargs_um):
         "lambda_leave_penalty": args.lambda_leave_penalty,
         "survey_positive_alpha": args.survey_positive_alpha,
         "survey_negative_beta": args.survey_negative_beta,
+        "leave_risk_discount": args.leave_risk_discount,
         "positive_rating_threshold": args.positive_rating_threshold,
         "negative_rating_threshold": args.negative_rating_threshold,
     }
