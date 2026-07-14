@@ -31,7 +31,9 @@ def prepare_dataset(args, dataset, MODEL_SAVE_PATH, DATAPATH):
 
     dataset_val, df_user_val, df_item_val = load_dataset_val(args, dataset, args.entity_dim, args.feature_dim)
     
-    assert dataset_train.x_columns[1].vocabulary_size >= dataset_val.x_columns[1].vocabulary_size  # item_ids of training set should cover the test set!
+    train_item_col = next(col for col in dataset_train.x_columns if col.name == "item_id")
+    val_item_col = next(col for col in dataset_val.x_columns if col.name == "item_id")
+    assert train_item_col.vocabulary_size >= val_item_col.vocabulary_size  # item_ids of training set should cover the test set!
 
     return dataset_train, dataset_val, df_user, df_item, df_user_val, df_item_val, x_columns, y_columns, ab_columns
 
