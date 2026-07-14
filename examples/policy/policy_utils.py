@@ -95,6 +95,15 @@ def get_args_all(trainer="onpolicy"):
     parser.add_argument('--reward_handle', type=str, default='cat')  # in {"no", "cat", "cat2", "mul"}
     parser.add_argument("--which_tracker", type=str, default="avg")  # in {"avg", "caser", "sasrec", "gru", "nextitnet"}
 
+    # simulated training reward
+    parser.add_argument("--simulated_reward_mode", type=str, default="none",
+                        choices=["none", "survey_reward_sensitivity"])
+    parser.add_argument("--lambda_leave_penalty", type=float, default=1.0)
+    parser.add_argument("--survey_positive_alpha", type=float, default=1.0)
+    parser.add_argument("--survey_negative_beta", type=float, default=1.0)
+    parser.add_argument("--positive_rating_threshold", type=float, default=4.0)
+    parser.add_argument("--negative_rating_threshold", type=float, default=2.0)
+
     parser.add_argument("--embedding_dim", type=int, default=32)
     parser.add_argument('--window_size', default=3, type=int)
 
@@ -191,6 +200,12 @@ def prepare_train_envs(args, ensemble_models, env, kwargs_um):
         "task_env_param": kwargs_um,
         "task_name": args.env,
         "predicted_mat": predicted_mat,
+        "simulated_reward_mode": args.simulated_reward_mode,
+        "lambda_leave_penalty": args.lambda_leave_penalty,
+        "survey_positive_alpha": args.survey_positive_alpha,
+        "survey_negative_beta": args.survey_negative_beta,
+        "positive_rating_threshold": args.positive_rating_threshold,
+        "negative_rating_threshold": args.negative_rating_threshold,
     }
 
     random.seed(args.seed)

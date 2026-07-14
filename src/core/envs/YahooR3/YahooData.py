@@ -139,6 +139,29 @@ class YahooData(BaseData):
         })
         return traits
 
+    def load_survey_rating_scores(self):
+        survey_path = os.path.join(DATAPATH, "ydata-ymusic-rating-study-v1_0-survey-answers.txt")
+        columns = [
+            "activity_level",
+            "rate_hate",
+            "rate_dislike",
+            "rate_neutral",
+            "rate_like",
+            "rate_love",
+            "preference_affect_answer",
+        ]
+        df = pd.read_csv(survey_path, sep=r"\s+", header=None, names=columns)
+        df["user_id"] = np.arange(len(df))
+
+        for col in ["rate_hate", "rate_dislike", "rate_like", "rate_love"]:
+            df[col + "_norm"] = (df[col].astype(float) - 1.0) / 4.0
+
+        return pd.DataFrame({
+            "user_id": df["user_id"],
+            "positive_reward_score": (df["rate_like_norm"] + df["rate_love_norm"]) / 2.0,
+            "negative_reward_score": (df["rate_hate_norm"] + df["rate_dislike_norm"]) / 2.0,
+        })
+
     def load_item_feat(self):
         df_item = pd.DataFrame(np.arange(1000), columns=["item_id"])
         df_item.set_index("item_id", inplace=True)
