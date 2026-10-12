@@ -1,6 +1,9 @@
 import argparse
 import sys
 import traceback
+import json
+from pathlib import Path
+import numpy as np
 from gymnasium.spaces import Discrete
 
 import torch
@@ -45,6 +48,9 @@ def get_args_DQN():
     parser.add_argument('--beta', type=float, default=0.4)
 
     parser.add_argument("--message", type=str, default="DQN")
+    parser.add_argument('--evaluation_only', action='store_true')
+    parser.add_argument('--policy_checkpoint', type=str)
+    parser.add_argument('--evaluation_output', type=str, default='visual_results/yahoo_calibration/final_evaluation.json')
 
     args = parser.parse_known_args()[0]
     return args
@@ -113,6 +119,8 @@ def setup_policy_model(args, state_tracker, train_envs, test_envs_dict):
 
 
 def main(args):
+    if args.simulated_reward_mode == 'yahoo_calibrated' and args.calibration_eval_split == 'test' and not args.evaluation_only:
+        raise ValueError('Final-test users are reserved: use --evaluation_only with a selected checkpoint')
     # %% 1. Prepare the saved path.
     MODEL_SAVE_PATH, logger_path = prepare_dir_log(args)
 
@@ -124,6 +132,32 @@ def main(args):
     state_tracker = setup_state_tracker(args, ensemble_models, env, train_envs, test_envs_dict)
     policy, train_collector, test_collector_set, optim = setup_policy_model(args, state_tracker, train_envs,
                                                                             test_envs_dict)
+
+    if args.evaluation_only:
+        if not args.policy_checkpoint:
+            raise ValueError('--evaluation_only requires --policy_checkpoint')
+        checkpoint = torch.load(args.policy_checkpoint, map_location=args.device, weights_only=False)
+        policy.policy.load_state_dict(checkpoint['policy'])
+        state_tracker.load_state_dict(checkpoint['state_tracker'])
+        policy.eval()
+        policy.policy.set_eps(0)
+        results = test_collector_set.collect(n_episode=args.test_num)
+        report = {'checkpoint': args.policy_checkpoint, 'seed': args.seed,
+                  'split': args.calibration_eval_split, 'calibration_mode': args.calibration_mode,
+                  'evaluation_reward': 'unchanged Yahoo pseudo-GT', 'results': {}}
+        for setting in ['FB', 'NX_0', f'NX_{args.force_length}']:
+            prefix = '' if setting == 'FB' else setting + '_'
+            rewards = np.asarray(results[prefix + 'rews'])
+            lengths = np.asarray(results[prefix + 'lens'])
+            report['results'][setting] = {'mean_total_reward': float(rewards.mean()),
+                                         'mean_steps': float(lengths.mean()),
+                                         'pooled_reward_per_step': float(rewards.sum() / lengths.sum()),
+                                         'episodes': len(lengths)}
+        output = Path(args.evaluation_output)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps(report, indent=2))
+        print(json.dumps(report, indent=2))
+        return
 
     # %% 4. Learn policy
     learn_policy(args, env, dataset, policy, train_collector, test_collector_set, state_tracker, optim, MODEL_SAVE_PATH,
@@ -143,3 +177,4 @@ if __name__ == "__main__":
         var = traceback.format_exc()
         print(var)
         logzero.logger.error(var)
+        raise

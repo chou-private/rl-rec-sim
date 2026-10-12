@@ -97,7 +97,11 @@ def get_args_all(trainer="onpolicy"):
 
     # simulated training reward
     parser.add_argument("--simulated_reward_mode", type=str, default="none",
-                        choices=["none", "survey_reward_sensitivity"])
+                        choices=["none", "survey_reward_sensitivity", "yahoo_calibrated"])
+    parser.add_argument('--calibration_artifact', type=str)
+    parser.add_argument('--calibration_mode', choices=['normalized', 'no_survey', 'survey', 'shuffled'], default='survey')
+    parser.add_argument('--calibration_lambda', type=float, default=1.0)
+    parser.add_argument('--calibration_eval_split', choices=['validation', 'test'], default='validation')
     parser.add_argument("--lambda_leave_penalty", type=float, default=1.0)
     parser.add_argument("--survey_positive_alpha", type=float, default=1.0)
     parser.add_argument("--survey_negative_beta", type=float, default=1.0)
@@ -195,6 +199,22 @@ def prepare_train_envs(args, ensemble_models, env, kwargs_um):
     with open(ensemble_models.PREDICTION_MAT_PATH, "rb") as file:
         predicted_mat = pickle.load(file)
 
+    if args.simulated_reward_mode == 'yahoo_calibrated':
+        from src.core.envs.Simulated_Env.calibrated_yahoo import CalibratedYahooEnv, UserPoolYahooEnv
+        from src.core.envs.Simulated_Env.yahoo_calibration import load_artifact
+        risk, fit_users, _ = load_artifact(args.calibration_artifact, predicted_mat, args.calibration_mode)
+        random.seed(args.seed)
+        np.random.seed(args.seed)
+        torch.manual_seed(args.seed)
+        pool_kwargs = dict(kwargs_um, user_ids=fit_users)
+        train_envs = DummyVectorEnv([lambda: CalibratedYahooEnv(
+            risk_mat=risk, calibration_lambda=args.calibration_lambda,
+            ensemble_models=ensemble_models, env_task_class=UserPoolYahooEnv,
+            task_env_param=pool_kwargs, task_name=args.env, predicted_mat=predicted_mat)
+            for _ in range(args.training_num)])
+        train_envs.seed(args.seed)
+        return train_envs
+
     kwargs = {
         "ensemble_models": ensemble_models,
         "env_task_class": type(env),
@@ -247,6 +267,14 @@ def prepare_test_envs(args, env, kwargs_um):
 
 def prepare_train_test_envs(args, ensemble_models):
     env, dataset, kwargs_um = get_true_env(args)
+    if args.simulated_reward_mode == 'yahoo_calibrated':
+        if args.env != 'YahooEnv-v0' or not args.calibration_artifact:
+            raise ValueError('yahoo_calibrated requires YahooEnv-v0 and --calibration_artifact')
+        from src.core.envs.Simulated_Env.calibrated_yahoo import UserPoolYahooEnv
+        with np.load(args.calibration_artifact, allow_pickle=False) as artifact:
+            users = np.array(artifact['val_users' if args.calibration_eval_split == 'validation' else 'test_users'])
+        kwargs_um = dict(kwargs_um, user_ids=users)
+        env = UserPoolYahooEnv(**kwargs_um)
     train_envs = prepare_train_envs(args, ensemble_models, env, kwargs_um)
     test_envs_dict = prepare_test_envs(args, env, kwargs_um)
     return env, dataset, train_envs, test_envs_dict
@@ -281,6 +309,9 @@ def setup_state_tracker(args, ensemble_models, env, train_envs, test_envs_dict, 
     else:
         train_max = train_envs.get_env_attr("MAX_R")[0] - train_envs.get_env_attr("MIN_R")[0]
         train_min = 0
+        if args.simulated_reward_mode == 'yahoo_calibrated':
+            train_min = -args.calibration_lambda
+            train_max = 1.0
     test_max = test_envs_dict['FB'].get_env_attr("mat")[0].max()
     test_min = test_envs_dict['FB'].get_env_attr("mat")[0].min()
 

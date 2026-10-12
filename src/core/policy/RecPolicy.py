@@ -148,7 +148,18 @@ class RecPolicy(ABC, nn.Module):
 
     def exploration_noise(self, act: Union[np.ndarray, Batch],
                           batch: Batch) -> Union[np.ndarray, Batch]:
-        return self.policy.exploration_noise(act, batch)
+        act = self.policy.exploration_noise(act, batch)
+        # Some policies inspect obs.mask, while this wrapper stores batch.mask.
+        # Preserve the candidate constraint after exploratory action selection.
+        if self.action_type == "discrete" and isinstance(act, np.ndarray) and hasattr(batch, "mask"):
+            mask = batch.mask.detach().cpu().numpy() if torch.is_tensor(batch.mask) else np.asarray(batch.mask)
+            for row in range(len(act)):
+                if not mask[row, int(act[row])]:
+                    allowed = np.flatnonzero(mask[row])
+                    if not len(allowed):
+                        raise ValueError("No valid recommendation actions remain")
+                    act[row] = np.random.choice(allowed)
+        return act
     
     # Trainer related
     def state_dict(self):
