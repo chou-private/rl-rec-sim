@@ -25,6 +25,8 @@ def get_args_all():
     parser.add_argument('--seed', default=2022, type=int)
     parser.add_argument("--bpr_weight", type=float, default=0.5)
     parser.add_argument('--neg_K', default=5, type=int)
+    parser.add_argument('--negative_weight', default=1.0, type=float,
+                        help='Weight of the complete sampled-negative term for pointneg; 0 disables it.')
     parser.add_argument('--n_models', default=5, type=int)
 
     # recommendation related:
