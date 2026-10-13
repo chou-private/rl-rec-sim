@@ -4,6 +4,9 @@ import collections
 import json
 import time
 import datetime
+import hashlib
+import pickle
+from pathlib import Path
 import logzero
 import numpy as np
 import pandas as pd
@@ -27,6 +30,12 @@ def get_args_all():
     parser.add_argument('--neg_K', default=5, type=int)
     parser.add_argument('--negative_weight', default=1.0, type=float,
                         help='Weight of the complete sampled-negative term for pointneg; 0 disables it.')
+    parser.add_argument('--sampling_seed', default=None, type=int,
+                        help='Fix NumPy random sampling before dataset construction.')
+    parser.add_argument('--survey_negative_mode', choices=['uniform', 'survey', 'shuffled'], default='uniform')
+    parser.add_argument('--survey_negative_prediction', default=None,
+                        help='Frozen Yahoo ensemble prediction pickle used for score-category lookup.')
+    parser.add_argument('--survey_shuffle_seed', type=int, default=2022)
     parser.add_argument('--n_models', default=5, type=int)
 
     # recommendation related:
@@ -195,6 +204,8 @@ def load_dataset_train(args, dataset, tau, entity_dim, feature_dim, MODEL_SAVE_P
     neg_in_train = True if args.env == "KuaiRand-v0" and reward_features[0] != "watch_ratio_normed" else False
     neg_in_train = False  # todo: test for kuairand
 
+    if getattr(args, 'sampling_seed', None) is not None:
+        np.random.seed(args.sampling_seed)
     df_pos, df_neg = negative_sampling(df_train, df_item, df_user, reward_features[0], is_rand=True, neg_in_train=neg_in_train, neg_K=args.neg_K, sample_neg_popularity=args.sample_neg_popularity)
 
     df_x = df_pos[user_features + item_features]
@@ -219,6 +230,37 @@ def load_dataset_train(args, dataset, tau, entity_dim, feature_dim, MODEL_SAVE_P
         # Note that we use step as the proxy of timestamp
         timestamp = range(len(df_pos))
         exposure_pos = compute_exposure_effect(dataset, df_pos, timestamp, list_feat, tau, MODEL_SAVE_PATH, DATAPATH)
+    mode = getattr(args, 'survey_negative_mode', 'uniform')
+    if getattr(args, 'sampling_seed', None) is not None or mode != 'uniform':
+        audit = dict(mode=mode, sampling_seed=getattr(args, 'sampling_seed', None),
+                     positive_sha256=hashlib.sha256(np.ascontiguousarray(df_pos[['user_id', 'item_id', reward_features[0]]].to_numpy(dtype=np.float64)).tobytes()).hexdigest(),
+                     negative_sha256=hashlib.sha256(np.ascontiguousarray(df_neg[['user_id', 'item_id', reward_features[0]]].to_numpy(dtype=np.float64)).tobytes()).hexdigest())
+        multipliers = np.ones(len(df_neg))
+        if mode != 'uniform':
+            if args.env != 'YahooEnv-v0' or args.loss != 'pointneg' or args.is_userinfo:
+                raise ValueError('Survey penalties require Yahoo, pointneg and --no_userinfo')
+            if not args.survey_negative_prediction:
+                raise ValueError('Provide --survey_negative_prediction for survey/shuffled')
+            from src.core.util.yahoo_survey_negative import survey_negative_multipliers
+            path = Path(args.survey_negative_prediction)
+            with path.open('rb') as stream:
+                prediction = pickle.load(stream)
+            survey_path = Path('data/YahooR3/data_raw/ydata-ymusic-rating-study-v1_0-survey-answers.txt')
+            survey = np.loadtxt(survey_path, dtype=int)
+            if prediction.shape != (5400, 1000) or survey.shape != (5400, 7):
+                raise ValueError('Expected Yahoo 5400x1000 predictions and 5400x7 survey')
+            multipliers = survey_negative_multipliers(df_neg.user_id, df_neg.item_id, prediction,
+                                                      survey, mode, args.survey_shuffle_seed)
+            exposure_pos = np.column_stack([exposure_pos, multipliers])
+            audit.update(prediction_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+                         survey_sha256=hashlib.sha256(survey_path.read_bytes()).hexdigest(),
+                         shuffle_seed=args.survey_shuffle_seed)
+        weights = args.negative_weight * multipliers
+        audit.update(weight_mean=float(weights.mean()), weight_min=float(weights.min()),
+                     weight_max=float(weights.max()), respondent_weight_mean=float(weights[df_neg.user_id.to_numpy() < 5400].mean()))
+        audit_path = Path(MODEL_SAVE_PATH) / 'params' / f'[{args.message}]_negative_audit.json'
+        audit_path.write_text(json.dumps(audit, indent=2))
+        logzero.logger.info('Negative penalty audit: %s', json.dumps(audit))
     dataset = StaticDataset(x_columns, y_columns, num_workers=4)
     dataset.compile_dataset(df_x_all, df_y, exposure_pos)
 

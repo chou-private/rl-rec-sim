@@ -77,6 +77,13 @@ def loss_pointwise_negative(y, y_deepfm_pos, y_deepfm_neg, score, alpha_u=None, 
     negative_weight = getattr(args, 'negative_weight', 1.0)
     if not 0.0 <= negative_weight <= 1.0:
         raise ValueError('negative_weight must be in [0, 1]')
+    mode = getattr(args, 'survey_negative_mode', 'uniform')
+    negative_multiplier = 1
+    if mode != 'uniform':
+        if mode not in ('survey', 'shuffled') or score.ndim != 2 or score.shape[1] != 2:
+            raise ValueError('Survey loss requires exposure and penalty multiplier columns')
+        negative_multiplier = score[:, 1:2]
+        score = score[:, :1]
     y_weighted, loss_ab = process_logit(y_deepfm_pos, score, alpha_u=alpha_u, beta_i=beta_i, args=args)
 
     if log_var is not None:
@@ -91,7 +98,9 @@ def loss_pointwise_negative(y, y_deepfm_pos, y_deepfm_neg, score, alpha_u=None, 
         loss_var_neg = 0
 
     loss_y = (((y_weighted - y) ** 2) * inv_var).sum()
-    loss_y_neg = (((y_deepfm_neg - 0) ** 2) * inv_var_neg).sum()
+    loss_y_neg = ((((y_deepfm_neg - 0) ** 2) * inv_var_neg) * negative_multiplier).sum()
+    if log_var is not None:
+        loss_var_neg = (log_var_neg * negative_multiplier).sum()
 
     loss = loss_y + loss_ab + loss_var_pos + negative_weight * (loss_y_neg + loss_var_neg)
     return loss

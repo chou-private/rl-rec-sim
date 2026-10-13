@@ -132,3 +132,4 @@ if __name__ == '__main__':
         var = traceback.format_exc()
         print(var)
         logzero.logger.error(var)
+        raise
