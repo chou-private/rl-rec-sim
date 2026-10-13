@@ -11,6 +11,24 @@ from src.core.util.loss import loss_pointwise_negative
 
 
 class SurveyNegativeTests(unittest.TestCase):
+    def test_mixing_endpoints_half_strength_and_per_user_budget(self):
+        survey = np.array([[3, 1, 2, 3, 4, 5, 2], [3, 5, 5, 5, 5, 5, 2]])
+        pred = np.tile([1., 3., 5.], (2, 1))
+        users = np.array([0, 0, 0, 1, 1, 2])
+        items = np.array([0, 1, 2, 0, 2, 1])
+        for mode in ['survey', 'shuffled']:
+            full = survey_negative_multipliers(users, items, pred, survey, mode, normalization='user')
+            zero = survey_negative_multipliers(users, items, pred, survey, mode, normalization='user', mix_alpha=0.)
+            half = survey_negative_multipliers(users, items, pred, survey, mode, normalization='user', mix_alpha=.5)
+            np.testing.assert_allclose(zero, 1.)
+            np.testing.assert_allclose(half, .5 + .5*full)
+            for user in np.unique(users):
+                self.assertAlmostEqual(half[users == user].mean(), 1.)
+            self.assertEqual(half[-1], 1.)
+        for invalid in [-.1, 1.1, float('nan'), float('inf')]:
+            with self.assertRaises(ValueError):
+                survey_negative_multipliers(users, items, pred, survey, 'survey', mix_alpha=invalid)
+
     def test_user_normalization_preserves_each_user_budget_and_flat_profiles(self):
         survey = np.array([[3, 1, 2, 3, 4, 5, 2], [3, 5, 5, 5, 5, 5, 2],
                            [3, 1, 1, 1, 1, 1, 1]])

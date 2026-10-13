@@ -37,6 +37,8 @@ def get_args_all():
                         help='Frozen Yahoo ensemble prediction pickle used for score-category lookup.')
     parser.add_argument('--survey_shuffle_seed', type=int, default=2022)
     parser.add_argument('--survey_negative_normalization', choices=['global', 'user'], default='global')
+    parser.add_argument('--survey_negative_mix_alpha', type=float, default=1.0,
+                        help='Questionnaire influence: 0 gives uniform weights; 1 preserves full adjustment.')
     parser.add_argument('--n_models', default=5, type=int)
 
     # recommendation related:
@@ -234,7 +236,10 @@ def load_dataset_train(args, dataset, tau, entity_dim, feature_dim, MODEL_SAVE_P
     mode = getattr(args, 'survey_negative_mode', 'uniform')
     if getattr(args, 'sampling_seed', None) is not None or mode != 'uniform':
         normalization = getattr(args, 'survey_negative_normalization', 'global')
-        audit = dict(mode=mode, normalization=normalization, sampling_seed=getattr(args, 'sampling_seed', None),
+        mix_alpha = getattr(args, 'survey_negative_mix_alpha', 1.0)
+        if not 0.0 <= mix_alpha <= 1.0:
+            raise ValueError('survey_negative_mix_alpha must be finite and in [0, 1]')
+        audit = dict(mode=mode, normalization=normalization, mix_alpha=mix_alpha, sampling_seed=getattr(args, 'sampling_seed', None),
                      positive_sha256=hashlib.sha256(np.ascontiguousarray(df_pos[['user_id', 'item_id', reward_features[0]]].to_numpy(dtype=np.float64)).tobytes()).hexdigest(),
                      negative_sha256=hashlib.sha256(np.ascontiguousarray(df_neg[['user_id', 'item_id', reward_features[0]]].to_numpy(dtype=np.float64)).tobytes()).hexdigest())
         multipliers = np.ones(len(df_neg))
@@ -252,7 +257,7 @@ def load_dataset_train(args, dataset, tau, entity_dim, feature_dim, MODEL_SAVE_P
             if prediction.shape != (5400, 1000) or survey.shape != (5400, 7):
                 raise ValueError('Expected Yahoo 5400x1000 predictions and 5400x7 survey')
             multipliers = survey_negative_multipliers(df_neg.user_id, df_neg.item_id, prediction,
-                                                      survey, mode, args.survey_shuffle_seed, normalization)
+                                                      survey, mode, args.survey_shuffle_seed, normalization, mix_alpha)
             exposure_pos = np.column_stack([exposure_pos, multipliers])
             audit.update(prediction_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
                          survey_sha256=hashlib.sha256(survey_path.read_bytes()).hexdigest(),

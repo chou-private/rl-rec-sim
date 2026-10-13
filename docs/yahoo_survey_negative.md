@@ -34,3 +34,20 @@ bash scripts/run_yahoo_survey_negative_user.sh
 This runs only the two new survey/shuffled arms with messages `surveyneg-user-{survey,shuffled}-m1-s2022`. Reuse the previous uniform m1 group only in the same environment with matching sampling hashes. To run all three in a new environment, use `INCLUDE_UNIFORM=1 bash scripts/run_yahoo_survey_negative_user.sh`; the new baseline is `surveyneg-user-uniform-m1-s2022`. The same N_MODELS, PYTHON_BIN and YAHOO_SURVEY_PREDICTION overrides apply. Audit files now include the minimum and maximum of per-user average weights; these should both be 0.1 within floating-point precision for the new rule.
 
 Return complete logs, matPre, params and negative_audit JSON as before. This is a separate normalization ablation, not a strict missing-only sampler or ranking-loss experiment.
+
+## Half-strength questionnaire follow-up (server training only)
+
+`--survey_negative_mix_alpha 0.5` applies `w_mix = 0.1 + 0.5*(w_user - 0.1)`. Alpha defaults to 1 for backward compatibility; 0 recovers uniform weights. Alpha must be finite and in [0,1]. Every user's average remains 0.1, constant profiles and nonrespondents remain uniform, and both negative squared error and log-variance penalties use the mixed weights. The audit records mix_alpha.
+
+```bash
+git switch codex/yahoo-survey-calibrated-reward
+git pull --ff-only origin codex/yahoo-survey-calibrated-reward
+conda activate easyrl4rec
+bash scripts/run_yahoo_survey_negative_mix.sh
+```
+
+Default: four single-member, five-epoch arms, full/half strength crossed with survey/shuffled. Full-strength runs are included because the previous per-user-normalization experiment ran locally. Compare against the existing SERVER `surveyneg-uniform-m1-s2022` baseline only with matching sampling hashes and the same training setup. Do not mix local full-strength results with server half-strength results. If the baseline/environment/model count changed, run `INCLUDE_UNIFORM=1 bash scripts/run_yahoo_survey_negative_mix.sh` for a fresh baseline too. If full-strength arms already completed in the identical server setup, `RUN_FULL_STRENGTH=0` runs just the two half-strength arms.
+
+New messages: `surveyneg-user-{full,mix05}-{survey,shuffled}-m1-s2022`. They preserve earlier files. Optional fresh uniform message: `surveyneg-mix-uniform-m1-s2022`. Return complete logs, matPre/params pickles and negative_audit JSON for every new arm. The corresponding names contain m5 if N_MODELS=5. PYTHON_BIN and YAHOO_SURVEY_PREDICTION overrides still apply.
+
+Question: does half strength reduce the accuracy loss while retaining the concentration improvement? A return toward baseline on all metrics alone is not evidence of added questionnaire value. Assess real score error, candidate ranking, coverage/concentration and both natural-ending and fixed-length simulated reward separately. This is a preselected alpha sensitivity experiment, not a search for the best alpha. No full local training was run for this update.
