@@ -36,6 +36,7 @@ def get_args_all():
     parser.add_argument('--survey_negative_prediction', default=None,
                         help='Frozen Yahoo ensemble prediction pickle used for score-category lookup.')
     parser.add_argument('--survey_shuffle_seed', type=int, default=2022)
+    parser.add_argument('--survey_negative_normalization', choices=['global', 'user'], default='global')
     parser.add_argument('--n_models', default=5, type=int)
 
     # recommendation related:
@@ -232,7 +233,8 @@ def load_dataset_train(args, dataset, tau, entity_dim, feature_dim, MODEL_SAVE_P
         exposure_pos = compute_exposure_effect(dataset, df_pos, timestamp, list_feat, tau, MODEL_SAVE_PATH, DATAPATH)
     mode = getattr(args, 'survey_negative_mode', 'uniform')
     if getattr(args, 'sampling_seed', None) is not None or mode != 'uniform':
-        audit = dict(mode=mode, sampling_seed=getattr(args, 'sampling_seed', None),
+        normalization = getattr(args, 'survey_negative_normalization', 'global')
+        audit = dict(mode=mode, normalization=normalization, sampling_seed=getattr(args, 'sampling_seed', None),
                      positive_sha256=hashlib.sha256(np.ascontiguousarray(df_pos[['user_id', 'item_id', reward_features[0]]].to_numpy(dtype=np.float64)).tobytes()).hexdigest(),
                      negative_sha256=hashlib.sha256(np.ascontiguousarray(df_neg[['user_id', 'item_id', reward_features[0]]].to_numpy(dtype=np.float64)).tobytes()).hexdigest())
         multipliers = np.ones(len(df_neg))
@@ -250,7 +252,7 @@ def load_dataset_train(args, dataset, tau, entity_dim, feature_dim, MODEL_SAVE_P
             if prediction.shape != (5400, 1000) or survey.shape != (5400, 7):
                 raise ValueError('Expected Yahoo 5400x1000 predictions and 5400x7 survey')
             multipliers = survey_negative_multipliers(df_neg.user_id, df_neg.item_id, prediction,
-                                                      survey, mode, args.survey_shuffle_seed)
+                                                      survey, mode, args.survey_shuffle_seed, normalization)
             exposure_pos = np.column_stack([exposure_pos, multipliers])
             audit.update(prediction_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
                          survey_sha256=hashlib.sha256(survey_path.read_bytes()).hexdigest(),
@@ -258,6 +260,9 @@ def load_dataset_train(args, dataset, tau, entity_dim, feature_dim, MODEL_SAVE_P
         weights = args.negative_weight * multipliers
         audit.update(weight_mean=float(weights.mean()), weight_min=float(weights.min()),
                      weight_max=float(weights.max()), respondent_weight_mean=float(weights[df_neg.user_id.to_numpy() < 5400].mean()))
+        per_user = pd.Series(weights).groupby(df_neg.user_id.to_numpy()).mean()
+        audit.update(per_user_weight_mean_min=float(per_user.min()),
+                     per_user_weight_mean_max=float(per_user.max()))
         audit_path = Path(MODEL_SAVE_PATH) / 'params' / f'[{args.message}]_negative_audit.json'
         audit_path.write_text(json.dumps(audit, indent=2))
         logzero.logger.info('Negative penalty audit: %s', json.dumps(audit))

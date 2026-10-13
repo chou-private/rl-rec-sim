@@ -22,3 +22,15 @@ Interpretation: survey beating uniform and shuffled supports this questionnaire 
 Return for each message `surveyneg-{uniform,survey,shuffled}-m1-s2022`: complete log, matPre pickle, params pickle, and `params/[message]_negative_audit.json`. For N_MODELS=5 the message contains m5. Keep old results. Expected locations are DeepFM/logs, matsPre, params under saved_models/YahooEnv-v0.
 
 Validation: existing negative-weight tests, interpolation/direction, mean-penalty matching, nonrespondent handling, private shuffle RNG, weighted Gaussian penalty gradients, and a real-data dataset construction check. No full server training was performed locally.
+
+## Per-user normalization follow-up
+
+`--survey_negative_normalization user` divides each raw penalty by its mean across that user's training sampled candidates, instead of the overall respondent mean. Every user's average weight stays 0.1; constant answer profiles automatically produce a constant 0.1 penalty. The original global rule remains the default. Frozen predictions, sampler, observed targets and other loss terms stay the same.
+
+```bash
+bash scripts/run_yahoo_survey_negative_user.sh
+```
+
+This runs only the two new survey/shuffled arms with messages `surveyneg-user-{survey,shuffled}-m1-s2022`. Reuse the previous uniform m1 group only in the same environment with matching sampling hashes. To run all three in a new environment, use `INCLUDE_UNIFORM=1 bash scripts/run_yahoo_survey_negative_user.sh`; the new baseline is `surveyneg-user-uniform-m1-s2022`. The same N_MODELS, PYTHON_BIN and YAHOO_SURVEY_PREDICTION overrides apply. Audit files now include the minimum and maximum of per-user average weights; these should both be 0.1 within floating-point precision for the new rule.
+
+Return complete logs, matPre, params and negative_audit JSON as before. This is a separate normalization ablation, not a strict missing-only sampler or ranking-loss experiment.

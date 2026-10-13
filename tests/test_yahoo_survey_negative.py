@@ -11,6 +11,21 @@ from src.core.util.loss import loss_pointwise_negative
 
 
 class SurveyNegativeTests(unittest.TestCase):
+    def test_user_normalization_preserves_each_user_budget_and_flat_profiles(self):
+        survey = np.array([[3, 1, 2, 3, 4, 5, 2], [3, 5, 5, 5, 5, 5, 2],
+                           [3, 1, 1, 1, 1, 1, 1]])
+        pred = np.tile([1., 3., 5.], (3, 1))
+        users = np.array([0, 0, 0, 0, 1, 1, 2, 2, 3])
+        items = np.array([0, 0, 1, 2, 0, 2, 0, 2, 1])
+        for mode in ['survey', 'shuffled']:
+            w = survey_negative_multipliers(users, items, pred, survey, mode, 2022, 'user')
+            for user in np.unique(users):
+                self.assertAlmostEqual(w[users == user].mean(), 1.)
+        w = survey_negative_multipliers(users, items, pred, survey, 'survey', normalization='user')
+        np.testing.assert_allclose(w[users >= 1], 1.)
+        self.assertLess(w[0], w[3])
+        self.assertAlmostEqual(w.mean(), 1.)
+
     def test_interpolation_direction_mean_and_unknown_users(self):
         survey = np.array([[3, 1, 2, 3, 4, 5, 2], [3, 5, 4, 3, 2, 1, 2]])
         pred = np.array([[1., 3., 5.], [1., 3., 5.]])

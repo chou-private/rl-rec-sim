@@ -2,11 +2,14 @@
 import numpy as np
 
 
-def survey_negative_multipliers(users, items, prediction, survey, mode, shuffle_seed=2022):
+def survey_negative_multipliers(users, items, prediction, survey, mode, shuffle_seed=2022,
+                                normalization='global'):
     users, items = np.asarray(users, dtype=int), np.asarray(items, dtype=int)
     prediction, survey = np.asarray(prediction), np.asarray(survey)
     if mode not in ('survey', 'shuffled'):
         raise ValueError('mode must be survey or shuffled')
+    if normalization not in ('global', 'user'):
+        raise ValueError('normalization must be global or user')
     if survey.ndim != 2 or survey.shape[1] != 7 or prediction.shape[0] != len(survey):
         raise ValueError('Survey rows must match prediction users; require seven answers')
     if not np.isfinite(prediction).all() or not np.isin(survey[:, 1:6], [1, 2, 3, 4, 5]).all():
@@ -29,6 +32,13 @@ def survey_negative_multipliers(users, items, prediction, survey, mode, shuffle_
     # Bounded, ordinal-only sensitivity rule; never interpret as propensity.
     raw = .25 + .75 * (q - 1.) / 4.
     if len(raw):
-        result[known] = raw / raw.mean()
+        if normalization == 'global':
+            result[known] = raw / raw.mean()
+        else:
+            known_users = users[known]
+            sums = np.bincount(known_users, weights=raw, minlength=len(survey))
+            counts = np.bincount(known_users, minlength=len(survey))
+            means = sums[known_users] / counts[known_users]
+            result[known] = raw / means
     # Nonrespondents stay at the uniform baseline. Respondents' sample mean is 1.
     return result
