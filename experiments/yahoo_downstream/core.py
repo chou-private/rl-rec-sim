@@ -48,7 +48,8 @@ def load_artifacts(root, seed):
 
 def state_dim(embeddings):
     if isinstance(embeddings, dict):
-        return embeddings['item'].shape[1] + embeddings['user'].shape[1] + 1
+        extra = embeddings['questionnaire'].shape[1] if 'questionnaire' in embeddings else 0
+        return embeddings['item'].shape[1] + embeddings['user'].shape[1] + 1 + extra
     return embeddings.shape[1] + 1
 
 
@@ -67,7 +68,10 @@ def state_vector(actions, rewards, embeddings, window=3, user=None):
     if isinstance(embeddings, dict):
         if user is None:
             raise ValueError('Missing user index for personalized state')
-        return np.r_[embeddings['user'][user], history].astype(np.float32)
+        state = np.r_[embeddings['user'][user], history].astype(np.float32)
+        if 'questionnaire' in embeddings:
+            state = np.r_[state, embeddings['questionnaire'][user]].astype(np.float32)
+        return state
     return history
 
 
