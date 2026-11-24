@@ -165,7 +165,11 @@ def evaluate(policy, predicted, gt, distance, users, original_ids, groups, embed
     return {'summary': summary, 'users': rows}
 
 
-def train(predicted, gt, distance, pools, ids, groups, embeddings, args, seed, out):
+def train(predicted, gt, distance, pools, ids, groups, embeddings, args, seed, out, auxiliary=None, alpha=0.0):
+    if not np.isfinite(alpha) or alpha < 0:
+        raise ValueError('Invalid auxiliary strength')
+    if auxiliary is not None and (auxiliary.shape != predicted.shape or not np.isfinite(auxiliary).all()):
+        raise ValueError('Invalid auxiliary reward matrix')
     torch.manual_seed(seed)
     np.random.seed(seed)
     rng = np.random.default_rng(seed)
@@ -182,6 +186,7 @@ def train(predicted, gt, distance, pools, ids, groups, embeddings, args, seed, o
     history = []
     for epoch in range(1, args.epochs+1):
         losses = []
+        base_sum, auxiliary_sum, auxiliary_abs_sum, auxiliary_steps = 0.0, 0.0, 0.0, 0
         policy.train()
         for _ in range(args.steps_per_epoch):
             s = state_vector(actions, feedback, embeddings, args.window, user=user)
@@ -193,8 +198,16 @@ def train(predicted, gt, distance, pools, ids, groups, embeddings, args, seed, o
                     action = int(masked_argmax(policy(torch.as_tensor(s[None], device=args.device)),
                                   torch.as_tensor(mask[None], device=args.device)).item())
             done = leave(actions, action, distance, args.leave_threshold, args.window) or len(actions)+1 >= args.max_turn
-            reward = float((predicted[user, action]-1)/4)
-            actions.append(action); feedback.append(reward)
+            base_reward = float((predicted[user, action]-1)/4)
+            reward = base_reward + (alpha * float(auxiliary[user, action]) if auxiliary is not None else 0.0)
+            contribution = reward - base_reward
+            base_sum += base_reward
+            auxiliary_sum += contribution
+            auxiliary_abs_sum += abs(contribution)
+            auxiliary_steps += abs(contribution) > 1e-8
+            # Reward shaping affects the TD target only. State feedback remains
+            # the unchanged B prediction, matching the unshaped evaluation state.
+            actions.append(action); feedback.append(base_reward)
             ns = state_vector(actions, feedback, embeddings, args.window, user=user)
             mask[action] = False
             replay.add(s, action, reward, ns, done, mask)
@@ -217,6 +230,10 @@ def train(predicted, gt, distance, pools, ids, groups, embeddings, args, seed, o
         val = evaluate(policy, predicted, gt, distance, pools['validation'], ids, groups, embeddings, args, 'fixed')
         score = val['summary']['mean_reward']
         record = {'epoch': epoch, 'environment_steps': total, 'gradient_updates': updates,
+                  'mean_base_training_reward': base_sum / args.steps_per_epoch,
+                  'mean_auxiliary_contribution': auxiliary_sum / args.steps_per_epoch,
+                  'mean_abs_auxiliary_contribution': auxiliary_abs_sum / args.steps_per_epoch,
+                  'auxiliary_nonzero_step_fraction': auxiliary_steps / args.steps_per_epoch,
                   'mean_loss': float(np.mean(losses)) if losses else None, 'validation': val['summary']}
         history.append(record)
         print(json.dumps({'run': str(out), **record}), flush=True)
