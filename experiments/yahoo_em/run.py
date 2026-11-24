@@ -162,19 +162,22 @@ def initialize(ratings, args, seed):
     return copy.deepcopy(model.state_dict())
 
 
-def fit(ratings, rows_val, groups, table, initial, args, seed, label, out):
+def fit(ratings, rows_val, groups, table, initial, args, seed, label, out, recording_groups=None):
+    # Mechanism rows may be per-user while evaluation groups remain the five
+    # fixed questionnaire patterns. Legacy B/C callers retain group indexing.
+    mechanism_groups = groups if recording_groups is None else recording_groups
     model = make_model(ratings, args)
     model.load_state_dict(initial)
     ids = np.arange(ratings.size)
     counts = (ratings >= 0).sum(1)
     best_mae, best_state, best_round = float('inf'), None, None
     history = []
-    obs_before = objective(model, ratings, groups, table, args.batch_size, args.device, args.l2)
+    obs_before = objective(model, ratings, mechanism_groups, table, args.batch_size, args.device, args.l2)
     for step in range(1, args.em_rounds + 1):
         start = time.monotonic()
-        targets = e_step(model, ratings, groups, table, args.batch_size, args.device)
+        targets = e_step(model, ratings, mechanism_groups, table, args.batch_size, args.device)
         old = copy.deepcopy(model.state_dict())
-        q_before = objective(model, ratings, groups, table, args.batch_size, args.device, args.l2, targets)
+        q_before = objective(model, ratings, mechanism_groups, table, args.batch_size, args.device, args.l2, targets)
         accepted = False
         # Reset Adam each M-step; identical schedule/order for B/C. Backtrack if
         # minibatch optimization did not improve the full fixed-target objective.
@@ -185,8 +188,8 @@ def fit(ratings, rows_val, groups, table, initial, args, seed, label, out):
             rng = np.random.default_rng(seed + step * 1009)
             for _ in range(args.m_epochs):
                 train_pass(model, ratings, targets, ids, args, rng, optimizer)
-            q_after = objective(model, ratings, groups, table, args.batch_size, args.device, args.l2, targets)
-            obs_after = objective(model, ratings, groups, table, args.batch_size, args.device, args.l2)
+            q_after = objective(model, ratings, mechanism_groups, table, args.batch_size, args.device, args.l2, targets)
+            obs_after = objective(model, ratings, mechanism_groups, table, args.batch_size, args.device, args.l2)
             if np.isfinite(q_after) and q_after <= q_before + 1e-7 and obs_after <= obs_before + 1e-7:
                 accepted = True
                 break
