@@ -76,7 +76,7 @@ def load_probabilities(root,seed,hidden,own,shuffled):
     return tables,audit
 
 
-def main(args):
+def main(args, joint=False):
     if args.device=='auto':args.device='cuda' if torch.cuda.is_available() else 'cpu'
     torch.set_num_threads(args.threads);torch.use_deterministic_algorithms(True)
     root=Path(args.recording_root)
@@ -88,8 +88,9 @@ def main(args):
         'commit':subprocess.run(['git','rev-parse','HEAD'],capture_output=True,text=True).stdout.strip(),
         'source_sha256':{str(p):digest(p) for p in [Path(__file__),Path('experiments/yahoo_em/run.py'),
            Path('experiments/yahoo_em/model.py'),Path('experiments/yahoo_em/data.py'),Path('experiments/yahoo_recording/core.py')]},
+        'joint_source_sha256':digest(Path(__file__).with_name('joint.py')) if joint else None,
         'recording_metadata_sha256':{n:digest(root/n) for n in ['config.json','data_audit.json','splits.json','questionnaire_mapping.json']},
-        'note':'Frozen recording mechanisms; common preference initialization; shared previously explored internal holdout.'})
+        'note':('Joint constrained recording/preference EM' if joint else 'Frozen recording mechanisms') + '; common preference initialization; shared previously explored internal holdout.'})
     em.write_json(out/'data_audit.json',{'source_universe':audit,'effective_users':len(ids),
           'effective_active_ratings':int((ratings>=0).sum()),'effective_random_ratings':len(rows),
           'effective_split_counts':{k:len(v) for k,v in splits.items()}})
@@ -109,8 +110,14 @@ def main(args):
         for arm in ['global','own','shuffled']:
             directory=seedout/arm;directory.mkdir()
             np.save(directory/'recording_mu.npy',tables[arm])
-            model,_=em.fit(ratings,rows_val,groups,tables[arm],initial,args,seed,arm,directory,
-                           recording_groups=np.arange(len(ids)))
+            if joint:
+                from .joint import fit_joint, load_recording
+                features=shuffled if arm=='shuffled' else own
+                recording=load_recording(root,seed,arm,source_args['hidden'],args.device)
+                model,_=fit_joint(ratings,rows_val,groups,features,recording,initial,args,seed,arm,directory)
+            else:
+                model,_=em.fit(ratings,rows_val,groups,tables[arm],initial,args,seed,arm,directory,
+                               recording_groups=np.arange(len(ids)))
             del model
         per_arm={}
         for arm in ['global','own','shuffled']:
@@ -131,11 +138,11 @@ def main(args):
           'note':'User intervals conditional on fixed models; excludes recording and training estimation uncertainty.'})
     em.write_json(out/'summary.json',{'status':'completed',
        'smoke_only':bool(args.smoke_users_per_split or source_args['smoke_users_per_group']),
-       'runs':results,'note':'No DQN. Prediction metrics on random collected ratings; all mechanisms frozen.'})
+       'runs':results,'note':'No DQN. Prediction metrics on random collected ratings; ' + ('joint constrained EM.' if joint else 'all mechanisms frozen.')})
     print(f'Completed. Results: {out}',flush=True)
 
 
-if __name__=='__main__':
+def parser():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--recording-root',required=True);p.add_argument('--output',required=True)
     p.add_argument('--data',default='data/YahooR3/data_raw');p.add_argument('--device',default='auto')
@@ -146,10 +153,18 @@ if __name__=='__main__':
     p.add_argument('--dim',type=int,default=16);p.add_argument('--hidden',type=int,default=64)
     p.add_argument('--lr',type=float,default=.001);p.add_argument('--l2',type=float,default=1e-6)
     p.add_argument('--threads',type=int,default=4)
-    args=p.parse_args()
+    return p
+
+
+def validate_args(args):
     if min(args.em_rounds,args.m_epochs,args.batch_size,args.dim,args.hidden,args.threads)<1:
         raise SystemExit('Invalid training budget or dimensions')
     if args.warmup_epochs<0 or args.smoke_users_per_split<0 or not np.isfinite(args.lr) or not np.isfinite(args.l2) or args.lr<=0 or args.l2<0:
         raise SystemExit('Invalid optimization settings')
     if len(set(args.seeds))!=len(args.seeds):raise SystemExit('Duplicate seeds')
+
+
+if __name__=='__main__':
+    args=parser().parse_args()
+    validate_args(args)
     main(args)
